@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package streamdeck;
+
+option java_package = "com.streamdeck.protocol";
+option java_multiple_files = true;
+
+// Top-level envelope for all communication between Client and Host
+message DeckMessage {
+  int64 timestamp = 1;
+  oneof payload {
+    HandshakeRequest handshake_req = 2;
+    HandshakeResponse handshake_res = 3;
+    KeyEvent key_event = 4;
+    PageLayoutUpdate layout_update = 5;
+    KeyStateUpdate state_update = 6;
+    Heartbeat heartbeat = 7;
+  }
+}
+
+// Client -> Host: Initial connection and device info
+message HandshakeRequest {
+  string device_id = 1;
+  string device_name = 2;
+  string client_version = 3;
+  int32 screen_width_dp = 4;
+  int32 screen_height_dp = 5;
+  string auth_token = 6;
+}
+
+// Host -> Client: Acknowledgment and active profile state
+message HandshakeResponse {
+  bool success = 1;
+  string server_version = 2;
+  string message = 3;
+  string active_profile_id = 4;
+  string active_page_id = 5;
+  string session_token = 6;
+}
+
+// Client -> Host: Touch, press, release, or dial interaction
+enum KeyEventType {
+  DOWN = 0;
+  UP = 1;
+  LONG_PRESS = 2;
+  DIAL_ROTATE = 3;
+}
+
+message KeyEvent {
+  string profile_id = 1;
+  string page_id = 2;
+  int32 key_index = 3;
+  KeyEventType event_type = 4;
+  int32 delta_value = 5; // Used for rotary dials / sliders
+}
+
+// Host -> Client: Full grid layout update (when loading a new profile/page)
+message PageLayoutUpdate {
+  string profile_id = 1;
+  string page_id = 2;
+  int32 columns = 3;
+  int32 rows = 4;
+  repeated KeySlotConfig keys = 5;
+}
+
+message KeySlotConfig {
+  int32 index = 1;
+  string title = 2;
+  string icon_url = 3;
+  bytes icon_bytes = 4; // Optional direct binary payload for custom icons
+  string background_color = 5;
+  string badge_text = 6;
+  string badge_color = 7;
+  int32 toggle_state = 8;
+  bool is_dial = 9;
+}
+
+// Host -> Client: Real-time dynamic updates to individual keys (e.g. mute toggled, CPU spike)
+message KeyStateUpdate {
+  int32 key_index = 1;
+  optional string title = 2;
+  optional string badge_text = 3;
+  optional string badge_color = 4;
+  optional int32 toggle_state = 5;
+  optional string icon_checksum = 6;
+}
+
+message Heartbeat {
+  int64 ping = 1;
+}

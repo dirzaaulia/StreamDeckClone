@@ -1,0 +1,30 @@
+# Android
+*.iml
+.gradle/
+build/
+**/build/
+local.properties
+.idea/
+.kotlin/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+
+# Rust
+target/
+**/target/
+**/*.rs.bk
+
+# Node / Web / Tauri
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+
+# OS / Logs
+.DS_Store
+Thumbs.db
+*.log
+adb_trace.log

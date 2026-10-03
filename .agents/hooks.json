@@ -1,0 +1,16 @@
+﻿{
+  "line-count-guard": {
+    "PreToolUse": [
+      {
+        "matcher": "write_to_file|replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python scripts/check_line_limit.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,36 @@
+// [LINE BUDGET AUDIT] 38/250
+mod input;
+mod layout;
+mod protocol;
+mod server;
+mod audio;
+mod profiles;
+mod mdns;
+
+use tracing::info;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::registry()
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "host_desktop=info,tokio=info".into()))
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
+    info!("===============================================");
+    info!("   StreamDeck Clone: Windows Host Engine v0.1  ");
+    info!("   Transport: WebSocket (Protobuf) on :4455    ");
+    info!("   Automation: Win32 Input Native Driver       ");
+    info!("===============================================");
+
+    mdns::spawn_mdns_broadcaster(4455);
+    if let Some(ip) = mdns::get_local_ip() {
+        info!("   Local Wi-Fi IP: ws://{}:4455", ip);
+    }
+
+    let host_address = "0.0.0.0:4455";
+    let server = server::DeckServer::new(host_address);
+    server.run().await?;
+
+    Ok(())
+}
