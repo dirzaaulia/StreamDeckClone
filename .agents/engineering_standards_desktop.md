@@ -99,4 +99,9 @@ Every action, architectural recommendation, and code artifact for `host-desktop`
    - The GUI queries running host status via `tasklist` and can start the host silently in the background if not already running.
    - Supports both `host-desktop/target/release/host-desktop.exe` and debug paths.
 3. **Clean IPC**:
-   - Use strongly-typed Tauri commands (`#[tauri::command]`) for all frontend-to-Rust communication (`host_pid`, `launch_host`, `get_network_info`).
+   - Use strongly-typed Tauri commands (`#[tauri::command]`) for frontend-to-Rust communication. Keep the Rust host responsible for device connections and actions.
+4. **Native Windows feel with StreamDeck identity**:
+   - The desktop app must look and behave like a polished Windows application, not a website or a connection-only utility. Keep the deck editor central, with clear profile navigation, an inspector, and host/pairing controls.
+   - Use Windows-familiar typography, spacing, focus indicators, keyboard behavior, window resizing, scrolling, and context-appropriate feedback while keeping the app's own dark palette and accent. Respect system text scaling, reduced motion, and high-contrast needs where feasible.
+   - Keep styling maintainable: organize screen/component styles with CSS Modules and shared theme tokens rather than growing one global stylesheet. CSS Modules organize code; visual quality still requires deliberate design and real-window review. Do not add React or Tailwind solely for styling; Tauri and Vite remain the desktop architecture.
+   - Verify the actual Tauri window at normal and minimum sizes with keyboard and mouse. Avoid browser-like navigation, page reloads, web-style form layouts, and visible development consoles in normal release use.

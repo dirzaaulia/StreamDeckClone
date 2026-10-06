@@ -1,6 +1,6 @@
-use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use prost::Message;
+use std::time::Duration;
 use tokio::time::sleep;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
@@ -10,9 +10,7 @@ pub mod streamdeck {
     include!(concat!(env!("OUT_DIR"), "/streamdeck.rs"));
 }
 
-use streamdeck::{
-    deck_message, DeckMessage, HandshakeRequest, Heartbeat, KeyEvent, KeyEventType,
-};
+use streamdeck::{DeckMessage, HandshakeRequest, Heartbeat, KeyEvent, KeyEventType, deck_message};
 
 #[tokio::test]
 async fn test_handshake_and_key_event() {
@@ -72,7 +70,9 @@ async fn test_handshake_and_key_event() {
 
     // Connect test client
     let url = format!("ws://{}", addr);
-    let (ws_stream, _) = connect_async(&url).await.expect("Failed to connect to test server");
+    let (ws_stream, _) = connect_async(&url)
+        .await
+        .expect("Failed to connect to test server");
     let (mut write, mut read) = ws_stream.split();
 
     // 1. Send Handshake
@@ -129,7 +129,10 @@ async fn test_handshake_and_key_event() {
     };
     let mut ping_buf = Vec::new();
     ping_msg.encode(&mut ping_buf).unwrap();
-    write.send(WsMessage::Binary(ping_buf.into())).await.unwrap();
+    write
+        .send(WsMessage::Binary(ping_buf.into()))
+        .await
+        .unwrap();
 
     let pong_resp = read.next().await.unwrap().unwrap();
     if let WsMessage::Binary(bytes) = pong_resp {
@@ -142,5 +145,3 @@ async fn test_handshake_and_key_event() {
         }
     }
 }
-
-

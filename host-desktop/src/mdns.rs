@@ -20,8 +20,8 @@ pub fn spawn_mdns_broadcaster(port: u16) -> JoinHandle<()> {
             }
         };
 
-        let hostname = std::env::var("COMPUTERNAME")
-            .unwrap_or_else(|_| "streamdeck-host".to_string());
+        let hostname =
+            std::env::var("COMPUTERNAME").unwrap_or_else(|_| "streamdeck-host".to_string());
         let host_name_fqdn = format!("{}.local.", hostname.to_lowercase());
         let instance_name = format!("StreamDeck-{}", hostname);
         let service_type = "_streamdeck._tcp.local.";
@@ -50,7 +50,9 @@ pub fn spawn_mdns_broadcaster(port: u16) -> JoinHandle<()> {
         } else {
             tracing::info!(
                 "Started mDNS broadcaster on port {} (IP: {}, Host: {})",
-                port, ip_str, instance_name
+                port,
+                ip_str,
+                instance_name
             );
         }
 

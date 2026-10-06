@@ -3,10 +3,10 @@ use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
 use windows::Win32::Media::Audio::{
-    eMultimedia, eRender, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
+    IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, eMultimedia, eRender,
 };
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
+    CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
 };
 
 #[derive(Debug, Error)]
@@ -26,14 +26,11 @@ impl AudioController {
     pub fn new() -> Result<Arc<Mutex<Self>>, AudioError> {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-            let enumerator: IMMDeviceEnumerator = CoCreateInstance(
-                &MMDeviceEnumerator,
-                None,
-                CLSCTX_ALL,
-            )?;
+            let enumerator: IMMDeviceEnumerator =
+                CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
             let device: IMMDevice = enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia)?;
             let endpoint_volume: IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None)?;
-            
+
             Ok(Arc::new(Mutex::new(Self {
                 endpoint_volume: Some(endpoint_volume),
             })))
@@ -43,7 +40,9 @@ impl AudioController {
     #[allow(dead_code)]
     pub fn stub() -> Arc<Mutex<Self>> {
         tracing::warn!("WASAPI init failed, using AudioController stub");
-        Arc::new(Mutex::new(Self { endpoint_volume: None }))
+        Arc::new(Mutex::new(Self {
+            endpoint_volume: None,
+        }))
     }
 
     #[allow(dead_code)]

@@ -10,14 +10,14 @@ A high-performance, ultra-low latency, cross-platform Stream Deck system connect
 ┌──────────────────────────────────────────────────────────────┐
 │                    Android Mobile Client                     │
 │         Kotlin 2.1 • Jetpack Compose • Material 3            │
-│  - Adaptive Key Matrix (3x3 Grid, Custom Colors & Badges)    │
+│  - 3x3 Key Matrix (host-provided titles and actions)    │
 │  - Hybrid Discovery: mDNS (NsdManager) + TCP Subnet Scanner  │
 │  - WebSocket Client with Protocol Buffers Serialization      │
 └──────────────────────────────┬───────────────────────────────┘
                                │
-            WebSocket (Protobuf) over Port 4455
-            • Local Wi-Fi (e.g. ws://192.168.110.7:4455)
-            • ADB Reverse USB (ws://127.0.0.1:4455)
+            Pinned WSS (Protobuf) over Port 4455
+            • Local Wi-Fi (e.g. wss://192.168.110.7:4455)
+            • ADB Reverse USB (wss://127.0.0.1:4455)
                                │
 ┌──────────────────────────────▼───────────────────────────────┐
 │               Windows Host Engine (host-desktop)              │
@@ -57,7 +57,11 @@ StreamDeckClone/
 │   │   │   ├── data/net/                  # DeckWebSocketClient, DeckDiscoveryService
 │   │   │   └── presentation/deck/         # DeckScreen, ConnectionScreen, DeckViewModel
 │   │   └── res/values/                    # strings.xml, themes, colors (zero magic values)
-│   └── build.gradle.kts                   # checkLineBudget verification task
+│   └── app/build.gradle.kts               # Android app module
+├── gradle/                                # Single version catalog and Gradle wrapper
+├── settings.gradle.kts                    # Includes android/app as :app
+├── build.gradle.kts                       # checkLineBudget verification task
+├── gradlew.bat                            # Run Gradle from the repository root
 ├── host-desktop/                          # Native Windows Rust Host Engine
 │   ├── src/
 │   │   ├── main.rs                        # Main entry & tracing initializer
@@ -85,7 +89,7 @@ StreamDeckClone/
 
 Communication is bidirectional using binary Protocol Buffers over WebSocket:
 
-- **Handshake (`HandshakeRequest` / `HandshakeResponse`)**: Exposes client device details and protocol version compatibility.
+- **Handshake (`HandshakeRequest` / `HandshakeResponse`)**: A new phone sends the current pairing code from the desktop app; the host remembers that phone for later connections. Removing the phone from the desktop app also disconnects its active session.
 - **Heartbeat (`Heartbeat`)**: Sent every 5 seconds to track latency and keep connection alive.
 - **Key Event (`KeyEvent`)**:
   - `key_index`: Slot index (0–8 in 3x3 default grid).
@@ -117,21 +121,24 @@ Communication is bidirectional using binary Protocol Buffers over WebSocket:
    - **mDNS Broadcaster**: Host announces `_streamdeck._tcp.local.` on port `4455`.
    - **Subnet Port Scanner**: If router drops multicast packets (AP isolation), the Android app concurrently scans its local subnet (`192.168.x.x`) on TCP port `4455`, discovering the host within 300ms.
 2. **Manual IP Connection**:
-   - Users can manually type `host_ip:4455` and tap **Connect**. The app stores the address and automatically reconnects on future launches.
+   - Enter `host_ip:4455`, the six-digit code, and the certificate SHA-256 fingerprint shown under desktop **Connection details**. Compare the fingerprint on the trusted PC before connecting. The phone remembers the encrypted credential and pin for reconnecting.
 3. **USB Mode (ADB Reverse)**:
    - When plugged in via USB: `adb reverse tcp:4455 tcp:4455`.
-   - Tap **"Use USB (127.0.0.1)"** for zero-latency, router-free operation.
+   - Tap **"Use USB (127.0.0.1)"** and use the same certificate fingerprint; USB traffic is pinned WSS too.
 
 ---
 
 ## 6. How to Build & Run (Runbook)
 
-### 1-Command All-In-One Launcher:
-Open PowerShell and run:
+### Recommended: start and stop from the desktop app
+Build the host and desktop app as below, then open the desktop configurator. It automatically starts the host (the phone's WebSocket server) if no host is already running. Closing the desktop window quits the app and stops the host it started. A host started separately, especially as Administrator, remains owned by its original launcher and cannot be stopped by the desktop app. The connection controls are under **Connection settings**; pairing and editing buttons are the primary workflow. The desktop app embeds its frontend in release builds and does not run a separate Vite web server; `tauri dev` starts a Vite server only for development.
+
+### All-in-one development launcher:
+Connect one Android device (or set `ANDROID_SERIAL` if several are connected), then run from PowerShell:
 ```powershell
 .\run.ps1
 ```
-*Auto-elevates as Administrator, configures ADB reverse, builds release binaries if needed, and launches both the Host Engine and Desktop GUI.*
+The script requests Administrator access for Windows input injection, rebuilds the Windows host and GUI in release mode, builds and tests the Android debug app, installs and opens it on the selected device, configures ADB reverse when available, and starts both Windows programs. It stops on a build failure and will not replace an already running host. With no device, it builds Android and starts the desktop programs; connect a device and rerun to install it. This separately launched host is external to the GUI, so **Stop Host** cannot stop it; close the host process yourself.
 
 ### Manual Step-by-Step:
 1. **Build Host Engine**:
@@ -147,19 +154,33 @@ Open PowerShell and run:
    ```
 3. **Run Android App**:
    ```powershell
-   cd android
-   .\gradlew.bat checkLineBudget assembleDebug
-   adb install -r app/build/outputs/apk/debug/app-debug.apk
+   # From the repository root:
+   .\gradlew.bat checkLineBudget :app:testDebugUnitTest :app:assembleDebug
+   adb install -r android/app/build/outputs/apk/debug/app-debug.apk
    ```
-4. **Start Host as Administrator**:
-   Double-click `start-host.bat`.
+4. **Start the host**:
+   Open the desktop app; it starts the host automatically. Use `start-host.bat` only if you need a separately elevated host; that host cannot be stopped by closing the desktop app.
 
 ---
 
-## 7. Engineering Standards & Quality Gates
+## 7. Desktop Configurator Profiles
+
+The desktop configurator reads profiles from the host on connection. Save/Clear sends a validated nine-key profile to the host, which persists it in the user's configuration directory (`StreamDeckClone/config.json`) and broadcasts changes to connected Android decks when that profile is active. Foreground-window detection switches between Default, Browser, VSCode, OBS, and VisualStudio. The configurator must connect locally; remote LAN clients cannot edit profiles. Actions include volume and media controls, desktop/task-manager/screenshot shortcuts, Ctrl+C/V/Z/S/W, and F5. Empty actions do nothing. A malformed configuration file is left untouched and the host uses defaults until corrected. Profile saves reject unsupported actions or overlong fields instead of silently changing them.
+
+The editor supports drag-and-drop key swapping as well as an accessible keyboard alternative (select key, press 'M', select target key, Esc to cancel). Key swaps save persistently to host profiles. Release builds launch without terminal windows (`windows_subsystem = "windows"` and `CREATE_NO_WINDOW`), and the GUI layout spans full height.
+
+**Pair a phone:** Click **Pair my phone** in the desktop app and scan its QR code (`streamdeck-pair:v2:<ip>:<port>:<code>:<certificate-sha256>`) or manually enter the address, six-digit code, and certificate fingerprint shown under **Connection details**. Verify the fingerprint on the trusted PC. Codes expire after five minutes or ten failed attempts. Remove a paired phone under **Connected phones** to revoke access.
+
+**Secure-by-default migration:** Old v1 QR codes and unencrypted phone WebSockets are not supported. Existing phones must re-pair. Host certificate regeneration changes the fingerprint: verify the new one on the PC and re-pair rather than accepting a silent rotation. Phone credentials are encrypted using Android Keystore; host device tokens are hashed on disk. The desktop control socket is bound to `127.0.0.1:4456` and Tauri's native layer supplies the local control secret. A separately launched host works only when it uses the same user's accessible host identity; an elevated or different-user host may fail authentication and must be restarted under the correct user. Do not expose either port to the internet. Real phone-to-PC security verification is still pending.
+
+---
+
+## 8. Engineering Standards & Quality Gates
+
+Track implementation in [.agents/roadmap.md](.agents/roadmap.md) and separate automated versus user-run checks in [.agents/testing-results.md](.agents/testing-results.md). Update both after each meaningful phase.
 
 All development adheres strictly to the rules in `.agents/`:
 - **Line Budgets**: Max 250 lines per file (hard ceiling 300), max 40 lines per function, max 150 lines per ViewModel.
-- **Android Quality**: `./gradlew.bat checkLineBudget` must pass. Zero hardcoded strings, zero raw hex colors in UI.
+- **Android Quality**: Run `./gradlew.bat checkLineBudget` from the repository root. Zero hardcoded strings, zero raw hex colors in UI.
 - **Rust Quality**: `cargo clippy -- -D warnings` must pass with 0 errors and 0 warnings.
 - **Input Injection**: Atomic chords via `SendInput` with `wScan: 0` running in an elevated interactive session.

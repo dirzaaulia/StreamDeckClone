@@ -14,6 +14,7 @@
     "windows": [
       {
         "label":         "main",
+        "url":           "index.html",
         "title":         "StreamDeck Configurator",
         "width":         1000,
         "height":        660,
@@ -21,7 +22,7 @@
         "minHeight":     520,
         "resizable":     true,
         "decorations":   true,
-        "transparent":   false,
+        "transparent":   true,
         "fullscreen":    false,
         "alwaysOnTop":   false
       }

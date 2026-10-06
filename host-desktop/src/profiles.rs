@@ -1,11 +1,9 @@
 // [LINE BUDGET AUDIT] 0/150
 use std::collections::HashMap;
 use tokio::task::JoinHandle;
-use windows::Win32::Foundation::MAX_PATH;
+use windows::Win32::Foundation::{CloseHandle, MAX_PATH};
 use windows::Win32::System::ProcessStatus::GetModuleFileNameExW;
-use windows::Win32::System::Threading::{
-    OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
-};
+use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
 
 pub struct ProfileWatcher;
@@ -22,7 +20,8 @@ impl ProfileWatcher {
             let mut last_profile = String::new();
 
             loop {
-                let profile = Self::get_foreground_profile(&map).unwrap_or_else(|| "default".to_string());
+                let profile =
+                    Self::get_foreground_profile(&map).unwrap_or_else(|| "Default".to_string());
                 if profile != last_profile {
                     last_profile = profile.clone();
                     if tx.blocking_send(profile).is_err() {
@@ -47,17 +46,19 @@ impl ProfileWatcher {
                 return None;
             }
 
-            let process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid).ok()?;
-            
+            let process =
+                OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid).ok()?;
+
             let mut buf = [0u16; MAX_PATH as usize];
             let len = GetModuleFileNameExW(process, None, &mut buf);
+            let _ = CloseHandle(process);
             if len == 0 {
                 return None;
             }
 
             let path = String::from_utf16_lossy(&buf[..len as usize]);
             let exe_name = path.split('\\').next_back()?.to_lowercase();
-            
+
             map.get(&exe_name).cloned()
         }
     }

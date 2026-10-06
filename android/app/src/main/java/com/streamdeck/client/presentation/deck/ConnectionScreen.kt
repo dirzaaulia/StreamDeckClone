@@ -23,9 +23,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import com.streamdeck.client.R
 import com.streamdeck.client.core.theme.Spacing
 import com.streamdeck.client.data.net.ConnectionStatus
@@ -36,6 +40,7 @@ fun ConnectionScreen(
     onAction: (DeckUiAction) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
     var showRationale by remember { mutableStateOf(false) }
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -97,6 +102,7 @@ fun ConnectionScreen(
                     onCancel = { onAction(DeckUiAction.OnCancelConnectingClicked) },
                 )
                 is ConnectionStatus.Error -> ErrorBanner(message = status.message)
+                is ConnectionStatus.PairingRequired -> ErrorBanner(message = status.message)
                 else -> Unit
             }
 
@@ -111,9 +117,26 @@ fun ConnectionScreen(
             Spacer(modifier = Modifier.height(Spacing.large))
             ManualConnectionSection(
                 address = state.hostAddress,
+                pairingCode = state.pairingCode,
+                fingerprint = state.fingerprint,
+                onPairingCodeChange = { onAction(DeckUiAction.OnPairingCodeChanged(it)) },
+                onFingerprintChange = { onAction(DeckUiAction.OnFingerprintChanged(it)) },
                 onAddressChange = { onAction(DeckUiAction.OnHostAddressChanged(it)) },
                 onConnect = { onAction(DeckUiAction.OnConnectClicked) },
                 onUseLocalhost = { onAction(DeckUiAction.OnUseLocalhostClicked) },
+                onScanQr = {
+                    val options = GmsBarcodeScannerOptions.Builder()
+                        .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+                        .build()
+                    val scanner = GmsBarcodeScanning.getClient(context, options)
+                    scanner.startScan()
+                        .addOnSuccessListener { barcode ->
+                            barcode.rawValue?.let { onAction(DeckUiAction.OnQrCodeScanned(it)) }
+                        }
+                        .addOnFailureListener { e ->
+                            onAction(DeckUiAction.OnQrScanFailed(e.message ?: "Scanner error"))
+                        }
+                },
             )
 
             Spacer(modifier = Modifier.height(Spacing.medium))

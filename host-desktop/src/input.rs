@@ -2,7 +2,7 @@
 use std::sync::{Arc, Mutex};
 use tracing::{error, info};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
+    INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
     VIRTUAL_KEY, VK_CONTROL, VK_D, VK_ESCAPE, VK_LWIN, VK_MEDIA_NEXT_TRACK, VK_MEDIA_PLAY_PAUSE,
     VK_MEDIA_PREV_TRACK, VK_SHIFT, VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP,
 };
@@ -18,38 +18,61 @@ impl InputExecutor {
         Self { audio }
     }
 
-    /// Execute predefined action mapped to a key index
-    pub fn trigger_key_index(&self, key_index: i32) {
-        match key_index {
-            0 => self.action_toggle_mute(),
-            1 => self.action_volume_down(),
-            2 => self.action_volume_up(),
-            3 => {
-                info!("Slot 3: Media Play/Pause");
+    pub fn trigger_action(&self, action: &str) {
+        match action {
+            "vol_mute" => self.action_toggle_mute(),
+            "vol_down" => self.action_volume_down(),
+            "vol_up" => self.action_volume_up(),
+            "media_play_pause" => {
+                info!("Action: Media Play/Pause");
                 self.press_single_key(VK_MEDIA_PLAY_PAUSE);
             }
-            4 => {
-                info!("Slot 4: Media Previous");
+            "media_prev" => {
+                info!("Action: Media Previous");
                 self.press_single_key(VK_MEDIA_PREV_TRACK);
             }
-            5 => {
-                info!("Slot 5: Media Next");
+            "media_next" => {
+                info!("Action: Media Next");
                 self.press_single_key(VK_MEDIA_NEXT_TRACK);
             }
-            6 => {
-                info!("Slot 6: Show Desktop (Win + D)");
+            "desktop" => {
+                info!("Action: Show Desktop (Win + D)");
                 self.press_hotkey(&[VK_LWIN, VK_D]);
             }
-            7 => {
-                info!("Slot 7: Task Manager (Ctrl + Shift + Esc)");
+            "taskmgr" => {
+                info!("Action: Task Manager (Ctrl + Shift + Esc)");
                 self.press_hotkey(&[VK_CONTROL, VK_SHIFT, VK_ESCAPE]);
             }
-            8 => {
-                info!("Slot 8: Take Screenshot (Win + Shift + S)");
+            "screenshot" => {
+                info!("Action: Take Screenshot (Win + Shift + S)");
                 self.press_hotkey(&[VK_LWIN, VK_SHIFT, VIRTUAL_KEY(0x53)]);
             }
+            "ctrl_c" => {
+                info!("Action: Copy (Ctrl + C)");
+                self.press_hotkey(&[VK_CONTROL, VIRTUAL_KEY(0x43)]);
+            }
+            "ctrl_v" => {
+                info!("Action: Paste (Ctrl + V)");
+                self.press_hotkey(&[VK_CONTROL, VIRTUAL_KEY(0x56)]);
+            }
+            "ctrl_z" => {
+                info!("Action: Undo (Ctrl + Z)");
+                self.press_hotkey(&[VK_CONTROL, VIRTUAL_KEY(0x5A)]);
+            }
+            "ctrl_s" => {
+                info!("Action: Save (Ctrl + S)");
+                self.press_hotkey(&[VK_CONTROL, VIRTUAL_KEY(0x53)]);
+            }
+            "ctrl_w" => {
+                info!("Action: Close Tab (Ctrl + W)");
+                self.press_hotkey(&[VK_CONTROL, VIRTUAL_KEY(0x57)]);
+            }
+            "f5" => {
+                info!("Action: Refresh (F5)");
+                self.press_single_key(VIRTUAL_KEY(0x74));
+            }
             _ => {
-                info!("Unhandled slot index: {}", key_index);
+                info!("Unhandled action: {}", action);
             }
         }
     }
@@ -111,7 +134,11 @@ impl InputExecutor {
         unsafe {
             let sent = SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
             if sent != inputs.len() as u32 {
-                error!("Failed to send hotkey sequence, sent: {} of {}", sent, inputs.len());
+                error!(
+                    "Failed to send hotkey sequence, sent: {} of {}",
+                    sent,
+                    inputs.len()
+                );
             }
         }
     }

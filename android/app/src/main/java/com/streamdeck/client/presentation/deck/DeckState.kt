@@ -9,6 +9,8 @@ import com.streamdeck.client.data.net.WifiState
 data class DeckUiState(
     val connectionStatus: ConnectionStatus = ConnectionStatus.Disconnected,
     val hostAddress: String = "",
+    val pairingCode: String = "",
+    val fingerprint: String = "",
     val discoveredHosts: List<DiscoveredHost> = emptyList(),
     val isScanning: Boolean = false,
     val wifiState: WifiState = WifiState.Disconnected,
@@ -22,6 +24,8 @@ data class DeckUiState(
 
 sealed interface DeckUiAction {
     data class OnHostAddressChanged(val address: String) : DeckUiAction
+    data class OnPairingCodeChanged(val code: String) : DeckUiAction
+    data class OnFingerprintChanged(val fingerprint: String) : DeckUiAction
     data class OnDiscoveredHostSelected(val address: String) : DeckUiAction
     data object OnConnectClicked : DeckUiAction
     data object OnDisconnectClicked : DeckUiAction
@@ -31,6 +35,8 @@ sealed interface DeckUiAction {
     data class OnKeyRelease(val slotIndex: Int) : DeckUiAction
     data object OnUseLocalhostClicked : DeckUiAction
     data object OnRefreshWifiClicked : DeckUiAction
+    data class OnQrCodeScanned(val rawCode: String) : DeckUiAction
+    data class OnQrScanFailed(val errorMessage: String) : DeckUiAction
 }
 
 sealed interface DeckUiEffect {

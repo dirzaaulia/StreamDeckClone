@@ -4,6 +4,8 @@
     <string name="deck_host_disconnected">Disconnected</string>
     <string name="deck_host_connecting">Connecting to %1$s…</string>
     <string name="deck_connect_button">Connect</string>
+    <string name="deck_pairing_code">Pairing code from desktop</string>
+    <string name="deck_pairing_code_hint">Enter code when connecting a new phone</string>
     <string name="deck_disconnect_button">Disconnect</string>
     <string name="deck_host_address_label">Host Address (e.g. 192.168.1.x:4455)</string>
     <string name="deck_host_address_hint">192.168.1.x:4455</string>
@@ -23,7 +25,7 @@
     <string name="deck_rescan">Rescan</string>
     <string name="deck_wifi_hint">Ensure your phone and PC are connected to the same Wi-Fi network and host engine is running.</string>
     <string name="deck_connection_failed_title">Connection Failed</string>
-    <string name="deck_connection_failed_msg">Could not connect to %1$s. Check host engine and Wi-Fi.</string>
+    <string name="deck_connection_failed_msg">%1$s</string>
     <string name="deck_cancel">Cancel</string>
     <string name="deck_wifi_connected_title">Connected Wi-Fi</string>
     <string name="deck_wifi_connected_desc">Network: \"%1$s\" (Ensure PC matches)</string>
@@ -37,4 +39,19 @@
     <string name="deck_wifi_dialog_desc">Android requires Location/Nearby permission to read Wi-Fi network names (SSID) and receive local network broadcasts.\n\nStreamDeck clone uses this solely to check that your phone and PC are on the same Wi-Fi network and auto-discover the host engine. Your GPS location is never accessed or shared.</string>
     <string name="deck_wifi_dialog_positive">Grant Permission</string>
     <string name="deck_wifi_dialog_negative">Not Now</string>
+    <string name="deck_scan_qr_button">Scan QR Code</string>
+    <string name="deck_qr_error_empty">QR code is empty.</string>
+    <string name="deck_qr_error_format">Invalid QR code format. Expected StreamDeck pairing code.</string>
+    <string name="deck_qr_error_version">Unsupported QR code version.</string>
+    <string name="deck_qr_error_ip">Invalid IP address in QR code.</string>
+    <string name="deck_qr_error_untrusted_ip">QR code IP must be on your local network (private or loopback address).</string>
+    <string name="deck_qr_error_port">Invalid port in QR code.</string>
+    <string name="deck_qr_error_code">Pairing code must be 6 digits.</string>
+    <string name="deck_qr_error_fingerprint">Invalid host certificate fingerprint in QR code.</string>
+    <string name="deck_fingerprint_label">Host fingerprint (SHA-256)</string>
+    <string name="deck_fingerprint_hint">Enter the 64-character fingerprint shown on your PC</string>
+    <string name="deck_fingerprint_required">Verify the host fingerprint in the desktop app or scan its QR code before connecting.</string>
+    <string name="deck_fingerprint_changed">This host fingerprint changed. Verify and re-pair using the desktop QR code.</string>
+    <string name="deck_pairing_storage_failed">Could not securely store pairing; pair again.</string>
+    <string name="deck_qr_scanner_failed">QR scanner unavailable: %1$s</string>
 </resources>

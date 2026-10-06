@@ -1,74 +1,9 @@
-// [LINE BUDGET AUDIT] 145/250
+// [LINE BUDGET AUDIT] 83/250
 use tauri::Manager;
 
-fn find_host_exe(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    if let Ok(dir) = app.path().resource_dir() {
-        let p = dir.join("host-desktop.exe");
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    if let Ok(current_exe) = std::env::current_exe()
-        && let Some(parent) = current_exe.parent()
-    {
-        let p = parent.join("host-desktop.exe");
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    let release_path = std::path::PathBuf::from(
-        r"d:\Android\Projects\StreamDeckClone\host-desktop\target\release\host-desktop.exe",
-    );
-    if release_path.exists() {
-        return Some(release_path);
-    }
-    let dev_path = std::path::PathBuf::from(
-        r"d:\Android\Projects\StreamDeckClone\host-desktop\target\debug\host-desktop.exe",
-    );
-    if dev_path.exists() {
-        return Some(dev_path);
-    }
-    None
-}
-
-/// Return the running host-desktop PID if found, else 0.
-#[tauri::command]
-fn host_pid() -> u32 {
-    #[cfg(windows)]
-    {
-        use std::process::Command;
-        let s = Command::new("tasklist")
-            .args(["/FI", "IMAGENAME eq host-desktop.exe", "/NH", "/FO", "CSV"])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-            .unwrap_or_default();
-        s.lines()
-            .next()
-            .and_then(|l| l.split(',').nth(1))
-            .and_then(|p| p.trim_matches('"').parse().ok())
-            .unwrap_or(0)
-    }
-    #[cfg(not(windows))]
-    0
-}
-
-/// Launch the host-desktop engine in the background silently.
-#[tauri::command]
-fn launch_host(app: tauri::AppHandle) -> Result<String, String> {
-    if host_pid() > 0 {
-        return Ok("Host engine already running".to_string());
-    }
-    let exe = find_host_exe(&app).ok_or_else(|| "host-desktop.exe not found".to_string())?;
-    let mut cmd = std::process::Command::new(exe);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
-    cmd.spawn()
-        .map(|_| "Host engine started successfully".to_string())
-        .map_err(|e| format!("Failed to launch host: {e}"))
-}
+mod host_process;
+mod control;
+mod tray;
 
 #[tauri::command]
 fn get_local_ip() -> String {
@@ -127,22 +62,60 @@ fn get_network_info() -> NetworkInfo {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+    #[cfg(windows)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            tray::show_main(app)
+        }));
+    }
+    builder
+        .manage(host_process::HostProcess::default())
+        .manage(control::ControlConnection::default())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            if host_pid() == 0 {
-                let handle = app.handle().clone();
-                let _ = launch_host(handle);
+            #[cfg(windows)]
+            if let Some(window) = app.get_webview_window("main")
+                && let Err(error) = window_vibrancy::apply_mica(&window, Some(true))
+            {
+                eprintln!("Mica unavailable; using solid theme: {error}");
+            }
+            tray::setup(app)?;
+            if let Err(error) = host_process::ensure_host_running(app.handle()) {
+                eprintln!("Could not start host on launch: {error}");
             }
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if window.label() == "main"
+                && let tauri::WindowEvent::CloseRequested { api, .. } = event
+            {
+                api.prevent_close();
+                host_process::stop_managed_host(
+                    window
+                        .app_handle()
+                        .state::<host_process::HostProcess>()
+                        .inner(),
+                );
+                window.app_handle().exit(0);
+            }
+        })
         .invoke_handler(tauri::generate_handler![
-            launch_host,
-            host_pid,
+            host_process::launch_host,
+            host_process::stop_host,
+            host_process::host_status,
             get_local_ip,
-            get_network_info
+            get_network_info,
+            control::host_fingerprint,
+            control::control_request,
+            control::control_disconnect
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building Tauri application")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                app.state::<tray::TrayPoller>().stop();
+                host_process::stop_managed_host(app.state::<host_process::HostProcess>().inner());
+            }
+        });
 }
-

@@ -13,18 +13,17 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.protobuf.ProtoBuf
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
-import java.util.concurrent.TimeUnit
 
 sealed interface ConnectionStatus {
     data object Disconnected : ConnectionStatus
     data class Connecting(val address: String) : ConnectionStatus
     data class Connected(val address: String) : ConnectionStatus
+    data class PairingRequired(val message: String) : ConnectionStatus
     data class Error(val message: String) : ConnectionStatus
 }
 
@@ -32,13 +31,11 @@ sealed interface ConnectionStatus {
 class DeckWebSocketClient(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO),
 ) {
-    private val client = OkHttpClient.Builder()
-        .readTimeout(0, TimeUnit.MILLISECONDS)
-        .pingInterval(5, TimeUnit.SECONDS)
-        .retryOnConnectionFailure(true)
-        .build()
-
-    private var activeWebSocket: WebSocket? = null
+    @Volatile private var activeWebSocket: WebSocket? = null
+    private var pairingCode: String = ""
+    private var deviceId: String = ""
+    private var savedToken: String = ""
+    private var onPaired: ((String) -> Unit)? = null
 
     private val _status = MutableStateFlow<ConnectionStatus>(ConnectionStatus.Disconnected)
     val status: StateFlow<ConnectionStatus> = _status.asStateFlow()
@@ -46,18 +43,16 @@ class DeckWebSocketClient(
     private val _incoming = MutableSharedFlow<DeckMessage>(extraBufferCapacity = 64)
     val incoming: SharedFlow<DeckMessage> = _incoming.asSharedFlow()
 
-    fun connect(host: String, port: Int = 4455) {
+    fun connect(host: String, port: Int, fingerprint: String, deviceId: String, token: String, pairingCode: String, onPaired: ((String) -> Unit)?) {
         disconnect()
-        val clean = host.trim().removePrefix("ws://").removePrefix("http://").trimEnd('/')
-        val address = if (clean.contains(":")) clean else "$clean:$port"
-        android.util.Log.i("StreamDeckClient", "Initiating WebSocket connection to ws://$address/")
+        this.deviceId = deviceId
+        this.savedToken = token
+        this.pairingCode = pairingCode
+        this.onPaired = onPaired
+        val address = "$host:$port"
         _status.value = ConnectionStatus.Connecting(address)
-
-        val request = Request.Builder()
-            .url("ws://$address/")
-            .build()
-
-        activeWebSocket = client.newWebSocket(request, createListener(address))
+        val request = Request.Builder().url("wss://$address/").build()
+        activeWebSocket = PinnedTls.client(fingerprint).newWebSocket(request, createListener(address))
     }
 
     fun disconnect() {
@@ -68,7 +63,9 @@ class DeckWebSocketClient(
 
     fun sendMessage(msg: DeckMessage) {
         val socket = activeWebSocket ?: return
+        if (_status.value !is ConnectionStatus.Connected) return
         scope.launch(Dispatchers.IO) {
+            if (activeWebSocket !== socket || _status.value !is ConnectionStatus.Connected) return@launch
             val bytes = ProtoBuf.encodeToByteArray(DeckMessage.serializer(), msg)
             socket.send(ByteString.of(*bytes))
         }
@@ -77,18 +74,39 @@ class DeckWebSocketClient(
     private fun createListener(address: String): WebSocketListener = object : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
             android.util.Log.i("StreamDeckClient", "WebSocket onOpen connected to $address")
-            _status.value = ConnectionStatus.Connected(address)
+            if (activeWebSocket !== webSocket) return
             sendHandshake(webSocket)
         }
 
         override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-            android.util.Log.i("StreamDeckClient", "WebSocket onMessage received ${bytes.size} bytes")
+            if (bytes.size > 65536) {
+                webSocket.close(1009, "Message too large")
+                return
+            }
             runCatching {
                 val decoded = ProtoBuf.decodeFromByteArray(
                     DeckMessage.serializer(),
                     bytes.toByteArray(),
                 )
-                scope.launch { _incoming.emit(decoded) }
+                if (activeWebSocket !== webSocket) return@runCatching
+                decoded.handshakeRes?.let { response ->
+                    if (response.success) {
+                        if (response.sessionToken.isNotBlank() && response.sessionToken != savedToken) {
+                            val stored = runCatching { onPaired?.invoke(response.sessionToken) }.isSuccess
+                            if (!stored) {
+                                _status.value = ConnectionStatus.Error("Could not securely store pairing")
+                                webSocket.close(1000, "Pairing storage failed")
+                                return@runCatching
+                            }
+                            savedToken = response.sessionToken
+                        }
+                        _status.value = ConnectionStatus.Connected(address)
+                    } else {
+                        _status.value = ConnectionStatus.PairingRequired(response.message)
+                        webSocket.close(1000, "Pairing required")
+                    }
+                }
+                if (_status.value is ConnectionStatus.Connected) scope.launch { _incoming.emit(decoded) }
             }.onFailure {
                 android.util.Log.e("StreamDeckClient", "Protobuf decode error", it)
             }
@@ -96,12 +114,22 @@ class DeckWebSocketClient(
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
             android.util.Log.e("StreamDeckClient", "WebSocket onFailure: ${t.javaClass.name}: ${t.message}", t)
-            _status.value = ConnectionStatus.Error(t.localizedMessage ?: "Connection failure")
+            if (activeWebSocket === webSocket) {
+                activeWebSocket = null
+                if (_status.value !is ConnectionStatus.PairingRequired) {
+                    _status.value = ConnectionStatus.Error(t.localizedMessage ?: "Connection failure")
+                }
+            }
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             android.util.Log.i("StreamDeckClient", "WebSocket onClosed: code=$code, reason=$reason")
-            _status.value = ConnectionStatus.Disconnected
+            if (activeWebSocket === webSocket) {
+                activeWebSocket = null
+                if (_status.value !is ConnectionStatus.PairingRequired && _status.value !is ConnectionStatus.Error) {
+                    _status.value = ConnectionStatus.Disconnected
+                }
+            }
         }
     }
 
@@ -109,9 +137,10 @@ class DeckWebSocketClient(
         val handshake = DeckMessage(
             timestamp = System.currentTimeMillis(),
             handshakeReq = HandshakeRequest(
-                deviceId = "android-${android.os.Build.MODEL}",
+                deviceId = deviceId,
                 deviceName = android.os.Build.MODEL ?: "Android Device",
                 clientVersion = "0.1.0",
+                authToken = pairingCode.ifBlank { savedToken },
             ),
         )
         val bytes = ProtoBuf.encodeToByteArray(DeckMessage.serializer(), handshake)

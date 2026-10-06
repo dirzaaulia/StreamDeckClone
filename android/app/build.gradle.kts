@@ -6,11 +6,11 @@ plugins {
 
 android {
     namespace = "com.streamdeck.client"
-    compileSdk = 36
+    compileSdk = 37
     defaultConfig {
         applicationId = "com.streamdeck.client"
         minSdk = 26
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 1
         versionName = "1.0"
     }
@@ -52,6 +52,7 @@ dependencies {
   implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.activity.compose)
+  implementation(libs.google.play.services.codescanner)
 
   // Networking & Protobuf
   implementation(libs.kotlinx.serialization.protobuf)

@@ -1,75 +1,113 @@
-# ========================================================
-# StreamDeck Clone - 1-Command All-in-One Launcher
-# Builds & starts both Host Engine (Admin) and Desktop GUI
-# ========================================================
-
+# StreamDeck Clone - build and launch Windows host, desktop GUI, and Android app.
 $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location $ScriptDir
 
-# 1. Elevate to Administrator if not already elevated
-$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    Write-Host "[INFO] Requesting Administrator privileges for native Windows input injection..." -ForegroundColor Yellow
-    Start-Process powershell -Verb RunAs -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`""
-    exit
+function Invoke-Checked {
+    param([string]$Description, [scriptblock]$Command)
+    Write-Host "[BUILD] $Description" -ForegroundColor Cyan
+    & $Command
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Description failed (exit code $LASTEXITCODE). Nothing has been launched."
+    }
 }
 
-Write-Host "========================================================" -ForegroundColor Cyan
-Write-Host "   StreamDeck Clone: Building & Launching Environment   " -ForegroundColor Cyan
-Write-Host "========================================================" -ForegroundColor Cyan
+function Get-AndroidDevices {
+    $output = & adb devices
+    if ($LASTEXITCODE -ne 0) { throw "Could not list Android devices with ADB." }
+    @($output | Select-Object -Skip 1 | Where-Object { $_ -match '^([^\s]+)\s+device\s*$' } |
+        ForEach-Object { $Matches[1] })
+}
 
-# 2. Setup ADB USB Reverse (Port 4455)
-Write-Host "[1/4] Setting up ADB USB reverse port forward..." -ForegroundColor Green
 try {
-    adb reverse tcp:4455 tcp:4455 2>$null
-    Write-Host "      [OK] USB port forward active: localhost:4455 <-> Android" -ForegroundColor Gray
-} catch {
-    Write-Host "      [INFO] No ADB device connected via USB (Wi-Fi mode active)" -ForegroundColor Gray
-}
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator
+    )
+    if (-not $isAdmin) {
+        Write-Host "Requesting Administrator access for Windows input injection..." -ForegroundColor Yellow
+        Start-Process powershell.exe -Verb RunAs -WorkingDirectory $ScriptDir -ArgumentList @(
+            "-NoExit", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`""
+        )
+        return
+    }
+    foreach ($tool in @("cargo", "npm", "adb")) {
+        if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
+            throw "Missing $tool. Install it and add it to PATH before running this launcher."
+        }
+    }
+    $Gradle = Join-Path $ScriptDir "gradlew.bat"
+    if (-not (Test-Path $Gradle)) { throw "Missing Gradle wrapper: $Gradle" }
 
-# 3. Build & verify Host Engine
-Write-Host "[2/4] Verifying Host Engine release binary..." -ForegroundColor Green
-$HostExe = Join-Path $ScriptDir "host-desktop\target\release\host-desktop.exe"
-if (-not (Test-Path $HostExe)) {
-    Write-Host "      Building host-desktop in release mode..." -ForegroundColor Yellow
-    cargo build --release --manifest-path (Join-Path $ScriptDir "host-desktop\Cargo.toml")
-}
+    # Stop existing host or GUI instances so release builds can overwrite executables and ports 4455/4456 are freed
+    Stop-Process -Name "host-desktop", "streamdeck-gui" -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
 
-# 4. Build & verify Desktop GUI (Vite + Tauri)
-Write-Host "[3/4] Verifying Desktop Configurator GUI..." -ForegroundColor Green
-$GuiExe = Join-Path $ScriptDir "desktop-gui\src-tauri\target\release\streamdeck-gui.exe"
-$DistHtml = Join-Path $ScriptDir "desktop-gui\dist\index.html"
+    Invoke-Checked "Windows host (release)" { cargo build --release --manifest-path (Join-Path $ScriptDir "host-desktop\Cargo.toml") }
+    $HostExe = Join-Path $ScriptDir "host-desktop\target\release\host-desktop.exe"
+    if (-not (Test-Path $HostExe)) { throw "Host release executable was not produced." }
 
-if (-not (Test-Path $DistHtml)) {
-    Write-Host "      Building desktop-gui frontend (npm run build)..." -ForegroundColor Yellow
     Push-Location (Join-Path $ScriptDir "desktop-gui")
-    npm run build
-    Pop-Location
+    try {
+        if (-not (Test-Path "node_modules\.bin\vite.cmd")) {
+            Invoke-Checked "Desktop JavaScript dependencies" { npm ci }
+        }
+        Invoke-Checked "Desktop GUI (release)" { npx tauri build --no-bundle }
+    } finally {
+        Pop-Location
+    }
+    $GuiExe = Join-Path $ScriptDir "desktop-gui\src-tauri\target\release\streamdeck-gui.exe"
+    if (-not (Test-Path $GuiExe)) { throw "Desktop GUI release executable was not produced." }
+
+    Invoke-Checked "Android app (debug)" { & $Gradle checkLineBudget :app:testDebugUnitTest :app:assembleDebug }
+    $Apk = Join-Path $ScriptDir "android\app\build\outputs\apk\debug\app-debug.apk"
+    if (-not (Test-Path $Apk)) { throw "Android debug APK was not produced." }
+
+    $serial = $env:ANDROID_SERIAL
+    $devices = @(Get-AndroidDevices)
+    if ($serial) {
+        if ($serial -notin $devices) { throw "ANDROID_SERIAL '$serial' is not an online ADB device." }
+    } elseif ($devices.Count -eq 1) {
+        $serial = $devices[0]
+    } elseif ($devices.Count -gt 1) {
+        Write-Warning "Multiple Android devices found. Set ANDROID_SERIAL and rerun to install and launch Android."
+    } else {
+        Write-Warning "No online Android device found. Android was built but cannot be installed or launched."
+    }
+
+    if ($serial) {
+        Invoke-Checked "Install Android app on $serial" { adb -s $serial install -r $Apk }
+        $reverseOutput = & adb -s $serial reverse tcp:4455 tcp:4455 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "ADB reverse unavailable for $serial; use the host's Wi-Fi address instead. $reverseOutput"
+        } else {
+            Write-Host "[OK] Port 4455 reversed for $serial (pinned TLS still required)." -ForegroundColor Gray
+        }
+    }
+
+
+    foreach ($port in @(4455, 4456)) {
+        if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) {
+            throw "Port $port is already in use. Close the listener before launching the Windows host."
+        }
+    }
+    Write-Host "[RUN] Starting Windows host..." -ForegroundColor Green
+    $hostProcess = Start-Process -FilePath $HostExe -WorkingDirectory (Join-Path $ScriptDir "host-desktop") -PassThru
+    Start-Sleep -Milliseconds 750
+    $hostProcess.Refresh()
+    if ($hostProcess.HasExited) {
+        throw "Host exited during startup (code $($hostProcess.ExitCode)). Check its console output and credentials."
+    }
+    Write-Host "[RUN] Starting desktop GUI..." -ForegroundColor Green
+    Start-Process -FilePath $GuiExe -WorkingDirectory (Join-Path $ScriptDir "desktop-gui")
+
+    if ($serial) {
+        Invoke-Checked "Open Android app on $serial" {
+            adb -s $serial shell am start -n com.streamdeck.client/.MainActivity
+        }
+    }
+    Write-Host "Done. Windows host uses pinned WSS on port 4455 and loopback controls on port 4456." -ForegroundColor Green
+    if (-not $serial) { Write-Warning "Connect one Android device and rerun to install and open the app." }
+} catch {
+    Write-Error $_
+    exit 1
 }
-
-if (-not (Test-Path $GuiExe)) {
-    Write-Host "      Building desktop-gui native binary..." -ForegroundColor Yellow
-    cargo build --release --manifest-path (Join-Path $ScriptDir "desktop-gui\src-tauri\Cargo.toml")
-}
-
-# 5. Launch Host Engine
-Write-Host "[4/4] Launching StreamDeck Host Engine and GUI..." -ForegroundColor Green
-
-# Kill existing host-desktop if already running to prevent port conflict
-Get-Process -Name "host-desktop" -ErrorAction SilentlyContinue | Stop-Process -Force
-Start-Sleep -Milliseconds 300
-
-# Start host-desktop in its own window so logs are visible
-Start-Process -FilePath $HostExe -WorkingDirectory (Join-Path $ScriptDir "host-desktop")
-
-# Start desktop GUI
-Start-Process -FilePath $GuiExe -WorkingDirectory (Join-Path $ScriptDir "desktop-gui")
-
-Write-Host ""
-Write-Host "========================================================" -ForegroundColor Cyan
-Write-Host "  StreamDeck is RUNNING!" -ForegroundColor Green
-Write-Host "  - Host Engine: ws://0.0.0.0:4455 (Admin mode)" -ForegroundColor White
-Write-Host "  - Desktop GUI: StreamDeck Configurator active" -ForegroundColor White
-Write-Host "  - Android App: Open app, it will auto-scan & connect!" -ForegroundColor Yellow
-Write-Host "========================================================" -ForegroundColor Cyan
