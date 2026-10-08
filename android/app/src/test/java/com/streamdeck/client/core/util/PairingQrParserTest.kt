@@ -8,7 +8,7 @@ class PairingQrParserTest {
     private val fingerprint = "ab".repeat(32)
 
     @Test fun privateAndLoopbackAddresses() {
-        for (host in listOf("192.168.1.100", "127.0.0.1", "10.0.5.20", "172.16.0.1", "169.254.12.34")) {
+        for (host in listOf("192.168.1.100", "127.0.0.1", "10.0.5.20", "172.16.0.1", "169.254.12.34", "100.71.216.2", "100.100.100.100")) {
             val result = PairingQrParser.parse("streamdeck-pair:v2:$host:4455:000123:$fingerprint")
             assertTrue(result is QrParseResult.Success)
             val payload = (result as QrParseResult.Success).payload

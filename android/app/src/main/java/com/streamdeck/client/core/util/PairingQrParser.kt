@@ -71,6 +71,7 @@ object PairingQrParser {
             o1 == 172 && o2 in 16..31 -> true
             o1 == 192 && o2 == 168 -> true
             o1 == 169 && o2 == 254 -> true
+            o1 == 100 && o2 in 64..127 -> true
             else -> false
         }
     }

@@ -1,4 +1,4 @@
-// [LINE BUDGET AUDIT] 186/250
+// [LINE BUDGET AUDIT] 187/250
 package com.streamdeck.client.presentation.deck
 
 import android.app.Application
@@ -95,6 +95,7 @@ class DeckViewModel(
                         connectionStatus = ConnectionStatus.Disconnected,
                     )
                 }
+                connectToHost()
             }
             is QrParseResult.Error -> {
                 _uiState.update { it.copy(connectionStatus = ConnectionStatus.Error(app.getString(result.error.messageResId))) }

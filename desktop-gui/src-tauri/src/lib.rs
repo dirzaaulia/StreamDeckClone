@@ -1,4 +1,4 @@
-// [LINE BUDGET AUDIT] 134/250
+// [LINE BUDGET AUDIT] 174/250
 use tauri::Manager;
 
 mod host_process;
@@ -21,10 +21,37 @@ fn get_local_ip() -> String {
     .unwrap_or_else(|| "127.0.0.1".to_string())
 }
 
+#[cfg(windows)]
+fn get_tailscale_ip() -> Option<String> {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+    for path in ["tailscale", r"C:\Program Files\Tailscale\tailscale.exe"] {
+        let mut cmd = Command::new(path);
+        cmd.args(["ip", "-4"]);
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        if let Ok(out) = cmd.output()
+            && out.status.success()
+        {
+            let ip = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !ip.is_empty() && ip.starts_with("100.") {
+                return Some(ip);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(windows))]
+fn get_tailscale_ip() -> Option<String> {
+    None
+}
+
 #[derive(serde::Serialize)]
 pub struct NetworkInfo {
     pub wifi_name: Option<String>,
     pub ip: String,
+    pub local_ip: String,
+    pub tailscale_ip: Option<String>,
     pub port: u16,
 }
 
@@ -59,7 +86,18 @@ fn get_wifi_ssid() -> Option<String> {
 
 #[tauri::command]
 fn get_network_info() -> NetworkInfo {
-    let ip = get_local_ip();
+    let local = get_local_ip();
+    let ts_ip = get_tailscale_ip();
+    let ip = if let Ok(override_ip) = std::env::var("STREAMDECK_HOST_IP") {
+        let trimmed = override_ip.trim();
+        if !trimmed.is_empty() {
+            trimmed.to_string()
+        } else {
+            local.clone()
+        }
+    } else {
+        local.clone()
+    };
     let wifi_name = if ip.starts_with("100.") {
         Some("Tailscale Network".to_string())
     } else {
@@ -68,6 +106,8 @@ fn get_network_info() -> NetworkInfo {
     NetworkInfo {
         wifi_name,
         ip,
+        local_ip: local,
+        tailscale_ip: ts_ip,
         port: 4455,
     }
 }

@@ -75,6 +75,17 @@ function bindEvents() {
   document.getElementById('btn-connect')?.addEventListener('click', toggleConnection)
   document.getElementById('btn-host')?.addEventListener('click', toggleHost)
   document.getElementById('btn-copy-ip')?.addEventListener('click', copyIp)
+  document.getElementById('btn-toggle-network')?.addEventListener('click', () => {
+    if (net.ip === net.tailscale_ip) {
+      net.ip = net.local_ip
+      net.wifi_name = state.savedWifiName || null
+    } else if (net.tailscale_ip) {
+      state.savedWifiName = net.wifi_name
+      net.ip = net.tailscale_ip
+      net.wifi_name = 'Tailscale Network'
+    }
+    updatePairingQr()
+  })
   document.getElementById('btn-pair')?.addEventListener('click', () => sendControl({ type: 'start_pairing' }))
   document.querySelectorAll('[data-revoke]').forEach(el => el.addEventListener('click', () => {
     sendControl({ type: 'revoke_device', device_id: el.dataset.revoke })

@@ -26,6 +26,8 @@ export const state = {
 export const net = {
   wifi_name: null,
   ip: '127.0.0.1',
+  local_ip: '127.0.0.1',
+  tailscale_ip: null,
   port: 4455,
 }
 

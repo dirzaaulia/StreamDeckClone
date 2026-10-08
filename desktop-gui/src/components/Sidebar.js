@@ -37,9 +37,16 @@ export function renderSidebar() {
         <summary>Connection details</summary>
         <p>Phone can't find this PC? Use this address:</p>
         <button class="ip-badge" id="btn-copy-ip" title="Copy PC address">${address} · Copy</button>
+        ${(net.tailscale_ip && net.tailscale_ip !== net.ip) ? `
+          <button class="btn btn-outline btn-sm" id="btn-toggle-network" style="width:100%;margin-top:6px;">
+            Switch to Tailscale (${escapeHtml(net.tailscale_ip)})
+          </button>` : (net.tailscale_ip && net.local_ip && net.ip === net.tailscale_ip && net.local_ip !== net.tailscale_ip) ? `
+          <button class="btn btn-outline btn-sm" id="btn-toggle-network" style="width:100%;margin-top:6px;">
+            Switch to Local Wi-Fi (${escapeHtml(net.local_ip)})
+          </button>` : ''}
         <p>Certificate SHA-256 fingerprint:</p>
         <code class="fingerprint">${state.fingerprint ? escapeHtml(state.fingerprint) : 'Start the host to see its fingerprint'}</code>
-        ${net.wifi_name ? `<p>Wi-Fi: ${escapeHtml(net.wifi_name)}</p>` : ''}
+        ${net.wifi_name ? `<p>Network: ${escapeHtml(net.wifi_name)}</p>` : ''}
       </details>
     </aside>`
 }
