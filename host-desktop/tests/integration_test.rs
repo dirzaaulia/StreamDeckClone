@@ -14,14 +14,11 @@ use streamdeck::{DeckMessage, HandshakeRequest, Heartbeat, KeyEvent, KeyEventTyp
 
 #[tokio::test]
 async fn test_handshake_and_key_event() {
-    let test_port = 4456;
-    let addr = format!("127.0.0.1:{}", test_port);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
 
     // Spawn server in background
-    let server_addr = addr.clone();
     tokio::spawn(async move {
-        // We can run the server directly or let it listen
-        let listener = tokio::net::TcpListener::bind(&server_addr).await.unwrap();
         if let Ok((stream, _)) = listener.accept().await {
             let ws_stream = tokio_tungstenite::accept_async(stream).await.unwrap();
             let (mut write, mut read) = ws_stream.split();

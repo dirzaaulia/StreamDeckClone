@@ -1,4 +1,4 @@
-// [LINE BUDGET AUDIT] 195/250
+// [LINE BUDGET AUDIT] 235/250
 package com.streamdeck.client.data.net
 
 import android.content.Context
@@ -23,7 +23,7 @@ data class DiscoveredHost(
     val address: String,
 )
 
-class DeckDiscoveryService(context: Context) {
+class DeckDiscoveryService(private val context: Context) {
     private val nsdManager = context.getSystemService(Context.NSD_SERVICE) as NsdManager
     private val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
     private val serviceType = "_streamdeck._tcp"
@@ -186,11 +186,32 @@ class DeckDiscoveryService(context: Context) {
         }
     }
 
+    private fun probeHost(host: String, port: Int, displayName: String) {
+        try {
+            java.net.Socket().use { s ->
+                s.connect(java.net.InetSocketAddress(host, port), 250)
+                val address = "$host:$port"
+                val item = DiscoveredHost(displayName, address)
+                _discovered.update { list -> if (list.none { it.address == address }) list + item else list }
+            }
+        } catch (_: Exception) {}
+    }
+
     private fun startSubnetProbe() {
         scanScope?.cancel()
         val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         scanScope = scope
         scope.launch {
+            probeHost("127.0.0.1", 4455, "StreamDeck (ADB Loopback)")
+            val prefs = context.getSharedPreferences("deck_prefs", Context.MODE_PRIVATE)
+            prefs.getString("last_host", null)?.let { saved ->
+                if (saved.isNotBlank() && !saved.startsWith("127.0.0.1")) {
+                    val parts = saved.split(":")
+                    val host = parts.getOrNull(0).orEmpty()
+                    val port = parts.getOrNull(1)?.toIntOrNull() ?: 4455
+                    if (host.isNotEmpty()) probeHost(host, port, "StreamDeck ($host)")
+                }
+            }
             val ipInt = wifiManager?.connectionInfo?.ipAddress ?: 0
             if (ipInt != 0) {
                 val b1 = ipInt and 0xff
@@ -199,21 +220,7 @@ class DeckDiscoveryService(context: Context) {
                 val prefix = "$b1.$b2.$b3"
                 kotlinx.coroutines.coroutineScope {
                     (1..254).map { hostNum ->
-                        async {
-                            val ip = "$prefix.$hostNum"
-                            try {
-                                java.net.Socket().use { s ->
-                                    s.connect(java.net.InetSocketAddress(ip, 4455), 250)
-                                    val discovered = DiscoveredHost(
-                                        name = "StreamDeck ($ip)",
-                                        address = "$ip:4455",
-                                    )
-                                    _discovered.update { list ->
-                                        if (list.none { it.address == "$ip:4455" }) list + discovered else list
-                                    }
-                                }
-                            } catch (_: Exception) {}
-                        }
+                        async { probeHost("$prefix.$hostNum", 4455, "StreamDeck ($prefix.$hostNum)") }
                     }.awaitAll()
                 }
             }

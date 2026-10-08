@@ -25,8 +25,13 @@ async fn connect(
     let address = listener.local_addr().unwrap();
     let mut request = format!("ws://{address}").into_client_request().unwrap();
     if let Some(origin) = origin {
-        request.headers_mut().insert("origin", origin.parse().unwrap());
-        request.headers_mut().insert("authorization", "Bearer test-control-secret".parse().unwrap());
+        request
+            .headers_mut()
+            .insert("origin", origin.parse().unwrap());
+        request.headers_mut().insert(
+            "authorization",
+            "Bearer test-control-secret".parse().unwrap(),
+        );
     }
     let client = TcpStream::connect(address).await.unwrap();
     let (server, peer) = listener.accept().await.unwrap();
@@ -36,8 +41,17 @@ async fn connect(
     let control_secret = origin.map(|_| "test-control-secret".to_string());
     tokio::spawn(async move {
         handle_connection(
-            server, peer, executor, config, pairing, profile, tx, rx, file,
+            server,
+            peer,
+            executor,
+            config,
+            pairing,
+            profile,
+            tx,
+            rx,
+            file,
             control_secret,
+            None,
         )
         .await
         .unwrap();
@@ -60,13 +74,20 @@ async fn control_rejects_missing_or_wrong_credentials() {
     for (origin, credential) in [
         ("tauri://localhost", None),
         ("tauri://localhost", Some("Bearer wrong")),
-        ("https://untrusted.example", Some("Bearer test-control-secret")),
+        (
+            "https://untrusted.example",
+            Some("Bearer test-control-secret"),
+        ),
     ] {
         let address = listener.local_addr().unwrap();
         let mut request = format!("ws://{address}").into_client_request().unwrap();
-        request.headers_mut().insert("origin", origin.parse().unwrap());
+        request
+            .headers_mut()
+            .insert("origin", origin.parse().unwrap());
         if let Some(credential) = credential {
-            request.headers_mut().insert("authorization", credential.parse().unwrap());
+            request
+                .headers_mut()
+                .insert("authorization", credential.parse().unwrap());
         }
         let client = TcpStream::connect(address).await.unwrap();
         let (server, peer) = listener.accept().await.unwrap();
@@ -74,13 +95,27 @@ async fn control_rejects_missing_or_wrong_credentials() {
         let rx = tx.subscribe();
         let file = file.clone();
         tokio::spawn(async move {
-            let _ = handle_connection(server, peer, executor, config, pairing, profile,
-                tx, rx, file, Some("test-control-secret".to_string())).await;
+            let _ = handle_connection(
+                server,
+                peer,
+                executor,
+                config,
+                pairing,
+                profile,
+                tx,
+                rx,
+                file,
+                Some("test-control-secret".to_string()),
+                None,
+            )
+            .await;
         });
         assert!(client_async(request, client).await.is_err());
     }
     let mut gui = connect(&listener, Some("tauri://localhost"), &state, &file).await;
-    gui.send(WsMessage::Text(r#"{"type":"list_devices"}"#.into())).await.unwrap();
+    gui.send(WsMessage::Text(r#"{"type":"list_devices"}"#.into()))
+        .await
+        .unwrap();
     assert!(gui.next().await.unwrap().unwrap().is_text());
 }
 
@@ -97,7 +132,10 @@ async fn oversized_phone_frame_is_rejected() {
         tokio::sync::broadcast::channel(16).0,
     );
     let mut phone = connect(&listener, None, &state, &file).await;
-    phone.send(WsMessage::Binary(vec![0; 65_537].into())).await.unwrap();
+    phone
+        .send(WsMessage::Binary(vec![0; 65_537].into()))
+        .await
+        .unwrap();
     assert!(matches!(
         timeout(Duration::from_secs(3), phone.next()).await.unwrap(),
         Some(Ok(WsMessage::Close(_))) | None | Some(Err(_))
@@ -117,7 +155,10 @@ async fn malformed_phone_frame_closes_socket() {
         tokio::sync::broadcast::channel(16).0,
     );
     let mut phone = connect(&listener, None, &state, &file).await;
-    phone.send(WsMessage::Binary(vec![0xff, 0xff].into())).await.unwrap();
+    phone
+        .send(WsMessage::Binary(vec![0xff, 0xff].into()))
+        .await
+        .unwrap();
     assert!(matches!(
         timeout(Duration::from_secs(3), phone.next()).await.unwrap(),
         Some(Ok(WsMessage::Close(_))) | None
@@ -137,7 +178,9 @@ async fn repeated_handshake_closes_phone_socket() {
         tokio::sync::broadcast::channel(16).0,
     );
     let mut gui = connect(&listener, Some("tauri://localhost"), &state, &file).await;
-    gui.send(WsMessage::Text(r#"{"type":"start_pairing"}"#.into())).await.unwrap();
+    gui.send(WsMessage::Text(r#"{"type":"start_pairing"}"#.into()))
+        .await
+        .unwrap();
     let response = gui.next().await.unwrap().unwrap().into_text().unwrap();
     let value: serde_json::Value = serde_json::from_str(&response).unwrap();
     let code = value["code"].as_str().unwrap();
@@ -209,7 +252,10 @@ async fn pairing_blocks_unknown_phones_and_revocation_closes_active_session() {
 
     send_deck(&mut phone, handshake("")).await;
     assert!(!handshake_response(read_deck(&mut phone).await).success);
-    assert!(matches!(phone.next().await, Some(Ok(WsMessage::Close(_))) | None));
+    assert!(matches!(
+        phone.next().await,
+        Some(Ok(WsMessage::Close(_))) | None
+    ));
     let mut phone = connect(&listener, None, &state, &file).await;
 
     gui.send(WsMessage::Text(r#"{"type":"start_pairing"}"#.into()))

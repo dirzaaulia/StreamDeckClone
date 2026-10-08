@@ -1,4 +1,4 @@
-// [LINE BUDGET AUDIT] 83/250
+// [LINE BUDGET AUDIT] 134/250
 use tauri::Manager;
 
 mod host_process;
@@ -7,6 +7,12 @@ mod tray;
 
 #[tauri::command]
 fn get_local_ip() -> String {
+    if let Ok(ip) = std::env::var("STREAMDECK_HOST_IP") {
+        let trimmed = ip.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
     let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok();
     sock.and_then(|s| {
         s.connect("8.8.8.8:80").ok()?;
@@ -53,9 +59,15 @@ fn get_wifi_ssid() -> Option<String> {
 
 #[tauri::command]
 fn get_network_info() -> NetworkInfo {
+    let ip = get_local_ip();
+    let wifi_name = if ip.starts_with("100.") {
+        Some("Tailscale Network".to_string())
+    } else {
+        get_wifi_ssid()
+    };
     NetworkInfo {
-        wifi_name: get_wifi_ssid(),
-        ip: get_local_ip(),
+        wifi_name,
+        ip,
         port: 4455,
     }
 }

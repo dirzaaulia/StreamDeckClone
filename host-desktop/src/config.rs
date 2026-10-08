@@ -4,6 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct KeyConfig {
     pub id: u32,
     pub label: String,
@@ -42,6 +43,7 @@ impl KeyConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Profile {
     pub name: String,
     pub keys: Vec<KeyConfig>,
@@ -59,8 +61,18 @@ impl Profile {
     }
 }
 
+const CONFIG_VERSION: u32 = 1;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyConfig {
+    profiles: HashMap<String, Profile>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AppConfig {
+    pub version: u32,
     pub profiles: HashMap<String, Profile>,
 }
 
@@ -195,51 +207,139 @@ impl AppConfig {
             );
         }
 
-        Self { profiles }
+        Self {
+            version: CONFIG_VERSION,
+            profiles,
+        }
     }
 
-    pub fn load() -> Self {
-        let path = Self::config_path();
-        if let Ok(data) = fs::read_to_string(&path) {
-            if let Ok(config) = serde_json::from_str::<AppConfig>(&data) {
-                // Validate and sanitize loaded config
-                let mut valid = true;
-                for profile in config.profiles.values() {
-                    if !profile.validate() {
-                        valid = false;
-                        break;
-                    }
-                }
-                if valid
-                    && Self::default_config()
-                        .profiles
-                        .keys()
-                        .all(|name| config.profiles.contains_key(name))
-                {
-                    return config;
-                }
+    fn valid(&self) -> bool {
+        self.version == CONFIG_VERSION
+            && self
+                .profiles
+                .iter()
+                .all(|(name, profile)| name == &profile.name && profile.validate())
+            && Self::default_config()
+                .profiles
+                .keys()
+                .all(|name| self.profiles.contains_key(name))
+    }
+
+    pub fn load() -> Result<Self, std::io::Error> {
+        Self::load_from(&Self::config_path())
+    }
+
+    fn load_from(path: &std::path::Path) -> Result<Self, std::io::Error> {
+        let data = match fs::read_to_string(path) {
+            Ok(data) => data,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let default = Self::default_config();
+                default.save_to(path)?;
+                return Ok(default);
             }
-            // Corrupt or invalid config: return default, do NOT overwrite the corrupt file
-            return Self::default_config();
+            Err(error) => return Err(error),
+        };
+        let value: serde_json::Value = serde_json::from_str(&data)?;
+        let legacy = value.get("version").is_none();
+        if !legacy
+            && value.get("version").and_then(serde_json::Value::as_u64)
+                != Some(CONFIG_VERSION as u64)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Unsupported profile version",
+            ));
         }
-        let default = Self::default_config();
-        let _ = default.save(); // Save defaults if missing
-        default
+        let config: Self = if legacy {
+            let old: LegacyConfig = serde_json::from_value(value)?;
+            Self {
+                version: CONFIG_VERSION,
+                profiles: old.profiles,
+            }
+        } else {
+            serde_json::from_value(value)?
+        };
+        if !config.valid() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Invalid profile config",
+            ));
+        }
+        if legacy {
+            let backup = path.with_extension("legacy.json");
+            match fs::read(&backup) {
+                Ok(existing) if existing != data.as_bytes() => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::AlreadyExists,
+                        "Different legacy backup exists",
+                    ));
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    let mut backup_file = fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&backup)?;
+                    use std::io::Write;
+                    backup_file.write_all(data.as_bytes())?;
+                    backup_file.sync_all()?;
+                }
+                Err(error) => return Err(error),
+            }
+            config.save_to(path)?;
+        }
+        Ok(config)
     }
 
     pub fn save(&self) -> Result<(), std::io::Error> {
-        let path = Self::config_path();
+        self.save_to(&Self::config_path())
+    }
+
+    fn save_to(&self, path: &std::path::Path) -> Result<(), std::io::Error> {
+        if !self.valid() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Invalid profile config",
+            ));
+        }
+        // Loading a damaged or future-version file must never turn a later save
+        // into an overwrite of that file.
+        match fs::read_to_string(path) {
+            Ok(existing) => {
+                let value: serde_json::Value = serde_json::from_str(&existing)?;
+                let version = value.get("version").and_then(serde_json::Value::as_u64);
+                if version != Some(CONFIG_VERSION as u64) && version.is_some() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Unsupported profile version",
+                    ));
+                }
+                let valid_existing = if version.is_none() {
+                    let legacy: LegacyConfig = serde_json::from_value(value)?;
+                    Self {
+                        version: CONFIG_VERSION,
+                        profiles: legacy.profiles,
+                    }
+                    .valid()
+                } else {
+                    let existing_config: Self = serde_json::from_value(value)?;
+                    existing_config.valid()
+                };
+                if !valid_existing {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Invalid existing profile config",
+                    ));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-
-        let data = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-
-        let temp_path = path.with_extension("tmp");
-        fs::write(&temp_path, data)?;
-        fs::rename(temp_path, path)?;
-        Ok(())
+        let data = serde_json::to_vec_pretty(self)?;
+        crate::storage::replace_file(path, &data)
     }
 
     pub fn config_path() -> PathBuf {
@@ -260,46 +360,94 @@ mod tests {
     #[test]
     fn test_config_default_and_persistence() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let config_file = temp_dir.path().join("config.json");
-        unsafe {
-            std::env::set_var("STREAMDECK_TEST_CONFIG_PATH", config_file.to_str().unwrap());
-        }
-
-        // 1. Initial load should create defaults
-        let config1 = AppConfig::load();
-        assert!(config1.profiles.contains_key("Default"));
-        assert!(config1.profiles.contains_key("VSCode"));
-
-        let default_profile = config1.profiles.get("Default").unwrap();
-        assert_eq!(default_profile.keys.len(), 9);
-        assert_eq!(default_profile.keys[0].action, "vol_mute");
-
-        // 2. Modify and save
-        let mut config2 = AppConfig::load();
-        config2.profiles.get_mut("Default").unwrap().keys[0].label = "Muted".to_string();
-        let _ = config2.save();
-
-        // 3. Reload and verify
-        let config3 = AppConfig::load();
+        let path = temp_dir.path().join("config.json");
+        let mut config = AppConfig::load_from(&path).unwrap();
+        assert_eq!(config.version, CONFIG_VERSION);
+        assert_eq!(config.profiles["Default"].keys[0].action, "vol_mute");
+        config.profiles.get_mut("Default").unwrap().keys[0].label = "Muted".into();
+        config.save_to(&path).unwrap();
         assert_eq!(
-            config3.profiles.get("Default").unwrap().keys[0].label,
+            AppConfig::load_from(&path).unwrap().profiles["Default"].keys[0].label,
             "Muted"
         );
+    }
 
-        // 4. Test corruption handling
-        fs::write(&config_file, "{ corrupt_json: 1").unwrap();
-        let config_corrupt = AppConfig::load();
-        // Should fall back to default but NOT overwrite the corrupt file
+    #[test]
+    fn migration_keeps_original_backup_and_profiles() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut old = AppConfig::default_config();
+        let keys = &mut old.profiles.get_mut("Default").unwrap().keys;
+        keys[0].label = "Personal".into();
+        keys[0].icon = "custom-icon".into();
+        keys.swap(0, 8);
+        let legacy =
+            serde_json::to_string(&serde_json::json!({ "profiles": old.profiles })).unwrap();
+        fs::write(&path, &legacy).unwrap();
+        let migrated = AppConfig::load_from(&path).unwrap();
+        assert_eq!(migrated.profiles["Default"].keys[8].label, "Personal");
+        assert_eq!(migrated.profiles["Default"].keys[8].icon, "custom-icon");
+        assert_eq!(migrated.profiles["Default"].keys[8].id, 0);
+        assert_eq!(migrated.profiles["Default"].keys[0].id, 8);
+        assert_eq!(migrated.version, CONFIG_VERSION);
         assert_eq!(
-            config_corrupt.profiles.get("Default").unwrap().keys[0].label,
-            "Mute Audio"
-        ); // Default value
-        let file_contents = fs::read_to_string(&config_file).unwrap();
-        assert_eq!(file_contents, "{ corrupt_json: 1"); // File left untouched
+            fs::read_to_string(path.with_extension("legacy.json")).unwrap(),
+            legacy
+        );
+        assert_eq!(
+            AppConfig::load_from(&path).unwrap().profiles["Default"].keys[8].label,
+            "Personal"
+        );
+    }
 
-        unsafe {
-            std::env::remove_var("STREAMDECK_TEST_CONFIG_PATH");
+    #[test]
+    fn interrupted_migration_reuses_matching_backup_and_preserves_conflicts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let legacy = serde_json::to_string(&serde_json::json!({
+            "profiles": AppConfig::default_config().profiles
+        }))
+        .unwrap();
+        fs::write(&path, &legacy).unwrap();
+        let backup = path.with_extension("legacy.json");
+        fs::write(&backup, &legacy).unwrap();
+        assert!(AppConfig::load_from(&path).is_ok());
+        assert_eq!(fs::read_to_string(&backup).unwrap(), legacy);
+
+        fs::write(&path, &legacy).unwrap();
+        fs::write(&backup, "different backup").unwrap();
+        assert!(AppConfig::load_from(&path).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), legacy);
+        assert_eq!(fs::read_to_string(&backup).unwrap(), "different backup");
+    }
+
+    #[test]
+    fn invalid_and_future_configs_are_never_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        for data in [
+            "{ corrupt_json: 1",
+            r#"{"version":99,"profiles":{}}"#,
+            r#"{"version":1,"profiles":{}}"#,
+        ] {
+            fs::write(&path, data).unwrap();
+            assert!(AppConfig::load_from(&path).is_err());
+            assert!(AppConfig::default_config().save_to(&path).is_err());
+            assert_eq!(fs::read_to_string(&path).unwrap(), data);
         }
+    }
+
+    #[test]
+    fn unknown_fields_are_not_silently_discarded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut value = serde_json::to_value(AppConfig::default_config()).unwrap();
+        value["experimental"] = serde_json::json!(true);
+        let data = serde_json::to_string(&value).unwrap();
+        fs::write(&path, &data).unwrap();
+        assert!(AppConfig::load_from(&path).is_err());
+        assert!(AppConfig::default_config().save_to(&path).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), data);
     }
 
     #[test]

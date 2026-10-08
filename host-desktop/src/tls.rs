@@ -13,7 +13,10 @@ pub struct Identity {
 }
 
 pub fn config_dir() -> PathBuf {
-    crate::config::AppConfig::config_path().parent().unwrap().to_path_buf()
+    crate::config::AppConfig::config_path()
+        .parent()
+        .unwrap()
+        .to_path_buf()
 }
 
 fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -51,17 +54,25 @@ pub fn load_identity() -> Result<Identity, Box<dyn std::error::Error>> {
     let fingerprint = hex::encode(Sha256::digest(&cert_der));
     let cert = CertificateDer::from(cert_der);
     let key = PrivateKeyDer::Pkcs8(key_der.into());
-    let config = rustls::ServerConfig::builder().with_no_client_auth().with_single_cert(vec![cert], key)?;
+    let config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert], key)?;
 
     let secret_path = dir.join("control-secret");
     if !secret_path.exists() {
         let mut bytes = [0u8; 32];
-        SystemRandom::new().fill(&mut bytes).map_err(|_| "Randomness unavailable")?;
+        SystemRandom::new()
+            .fill(&mut bytes)
+            .map_err(|_| "Randomness unavailable")?;
         write_private(&secret_path, hex::encode(bytes).as_bytes())?;
     }
     let control_secret = fs::read_to_string(&secret_path)?;
     if control_secret.len() != 64 || hex::decode(&control_secret)?.len() != 32 {
         return Err("Invalid control secret".into());
     }
-    Ok(Identity { config, fingerprint, control_secret })
+    Ok(Identity {
+        config,
+        fingerprint,
+        control_secret,
+    })
 }

@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use subtle::ConstantTimeEq;
 use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -89,11 +89,13 @@ impl PairingStore {
         if device_id.len() > 128 {
             return;
         }
-        self.failed_attempts.retain(|_, failed| failed.elapsed() < Duration::from_secs(2));
+        self.failed_attempts
+            .retain(|_, failed| failed.elapsed() < Duration::from_secs(2));
         if self.failed_attempts.len() >= 256 && !self.failed_attempts.contains_key(device_id) {
             return;
         }
-        self.failed_attempts.insert(device_id.to_string(), Instant::now());
+        self.failed_attempts
+            .insert(device_id.to_string(), Instant::now());
     }
 
     pub fn pair(&mut self, code: &str, device_id: &str, path: &Path) -> io::Result<Option<String>> {
@@ -134,9 +136,10 @@ impl PairingStore {
             return false;
         }
         let hashed = hash_token(token);
-        let authorized = self.devices.get(device_id).is_some_and(|saved| {
-            saved.as_bytes().ct_eq(hashed.as_bytes()).unwrap_u8() == 1
-        });
+        let authorized = self
+            .devices
+            .get(device_id)
+            .is_some_and(|saved| saved.as_bytes().ct_eq(hashed.as_bytes()).unwrap_u8() == 1);
         if !authorized {
             self.record_failure(device_id);
         }
@@ -169,25 +172,7 @@ impl PairingStore {
             pending: None,
             failed_attempts: HashMap::new(),
         })?;
-        let temporary = path.with_extension(format!("{}.tmp", Uuid::new_v4()));
-        fs::write(&temporary, data)?;
-        if path.exists() {
-            let backup = path.with_extension(format!("{}.bak", Uuid::new_v4()));
-            if let Err(error) = fs::rename(path, &backup) {
-                let _ = fs::remove_file(&temporary);
-                return Err(error);
-            }
-            if let Err(error) = fs::rename(&temporary, path) {
-                let _ = fs::rename(&backup, path);
-                let _ = fs::remove_file(&temporary);
-                return Err(error);
-            }
-            let _ = fs::remove_file(backup);
-        } else if let Err(error) = fs::rename(&temporary, path) {
-            let _ = fs::remove_file(&temporary);
-            return Err(error);
-        }
-        Ok(())
+        crate::storage::replace_file(path, &data)
     }
 }
 
@@ -209,7 +194,11 @@ mod tests {
         let mut store = PairingStore::load(&path).unwrap();
         assert!(!store.is_authorized("phone", "legacy-plaintext-token"));
         assert!(store.devices().is_empty());
-        assert!(!fs::read_to_string(&path).unwrap().contains("legacy-plaintext-token"));
+        assert!(
+            !fs::read_to_string(&path)
+                .unwrap()
+                .contains("legacy-plaintext-token")
+        );
     }
 
     #[test]

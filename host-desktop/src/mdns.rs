@@ -1,10 +1,15 @@
-// [LINE BUDGET AUDIT] 55/100
+// [LINE BUDGET AUDIT] 69/100
 use mdns_sd::{ServiceDaemon, ServiceInfo};
 use std::collections::HashMap;
 use std::net::{IpAddr, UdpSocket};
 use tokio::task::JoinHandle;
 
 pub fn get_local_ip() -> Option<IpAddr> {
+    if let Ok(ip_str) = std::env::var("STREAMDECK_HOST_IP")
+        && let Ok(ip) = ip_str.trim().parse()
+    {
+        return Some(ip);
+    }
     let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect("8.8.8.8:80").ok()?;
     Some(socket.local_addr().ok()?.ip())

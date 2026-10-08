@@ -7,9 +7,11 @@ mod input;
 mod layout;
 mod mdns;
 mod pairing;
+mod peer_throttle;
 mod profiles;
 mod protocol;
 mod server;
+mod storage;
 mod tls;
 
 use tracing::info;

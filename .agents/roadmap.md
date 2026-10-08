@@ -1,6 +1,6 @@
 # StreamDeck Clone — implementation roadmap
 
-Last updated: 2026-10-04. Keep this file for **what to build and what changed**. Record verification separately in [testing-results.md](testing-results.md). A checked implementation item means the code exists; it does **not** mean a person has tried the complete phone-and-PC flow.
+Last updated: 2026-10-07. Keep this file for **what to build and what changed**. Record verification separately in [testing-results.md](testing-results.md). A checked implementation item means the code exists; it does **not** mean a person has tried the complete phone-and-PC flow.
 
 ## Product goal
 
@@ -41,14 +41,15 @@ Turn an Android phone into a customizable button deck for a Windows PC. The Wind
 - [x] Require pinned WSS on the phone listener and a QR v2 certificate fingerprint; reject old unencrypted phone traffic.
 - [x] Move desktop controls to a separately authenticated loopback endpoint; keep the control secret in native Tauri code rather than browser JavaScript.
 - [x] Encrypt Android pairing credentials and hash host device tokens at rest; reject plaintext legacy records.
-- [ ] Enforce restricted Windows ACLs and atomic identity/secret persistence; complete connection and per-peer throttling and negative transport tests.
+- [x] Bound failed phone attempts by network peer in addition to device-ID throttling, and use crash-safer replacement for profiles and paired-device records; add negative WebSocket tests.
+- [ ] Enforce restricted Windows ACLs and atomic identity/secret creation; complete TLS-level negative transport tests (including real-device pin mismatch).
 - [ ] Verify real phone pairing, pin mismatch, reconnect and revocation with the packaged apps.
 
 > Security hardening is not complete. Keep ports off the internet and do not claim the connection is production-ready until the remaining security checks and device trial pass.
 
 ## Phase 2 — pages, layouts, and everyday actions (planned)
 
-- [ ] Version saved profile/page/slot data and migrate existing 3×3 profiles without losing keys.
+- [x] Version the current host profile file and migrate existing unversioned 3×3 profiles without losing keys; preserve a legacy backup. Future page/slot schema still needs its own design.
 - [ ] Add pages/folders, key reorder, grid sizes, editing preview, icons/styles, undo and backup/export.
 - [ ] Add safe, bounded action sequences and common actions; validate edits on the host.
 - [ ] Keep layouts usable on phone, landscape and larger screens, with accessible touch targets.

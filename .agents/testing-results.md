@@ -1,6 +1,6 @@
 # StreamDeck Clone — testing results
 
-Last updated: 2026-10-04. This is the ongoing verification log for [.agents/roadmap.md](roadmap.md). **Automated pass ≠ real-use pass.** Record the date and result again whenever changes affect the flow; never carry a previous pass forward as proof of new code.
+Last updated: 2026-10-07. This is the ongoing verification log for [.agents/roadmap.md](roadmap.md). **Automated pass ≠ real-use pass.** Record the date and result again whenever changes affect the flow; never carry a previous pass forward as proof of new code.
 
 ## Automated checks — 2026-10-04 (Desktop GUI & Host Updates)
 
@@ -44,6 +44,18 @@ Run after terminal-free release launch, full-height window contents, persistent 
 | Android Gradle gates | PASS after current Android edits: `checkLineBudget`, `:app:testDebugUnitTest`, `:app:assembleDebug`. Earlier run reported 5 tests; latest build succeeded. |
 
 Manual pinned-TLS, real phone pairing, reconnect, revocation, and live PC controls are **NOT RUN**. Global/per-IP concurrent connection caps were added, but peer-based failed-attempt throttling, identity file ACLs, and full negative transport coverage still need work; no security-complete claim yet.
+
+## Automated checks — 2026-10-07 (profile migration and targeted host hardening)
+
+| Check | Result |
+|---|---|
+| Host `cargo fmt --check`, `cargo clippy --offline --all-targets -- -D warnings`, `cargo test --offline` | PASS: 18 unit tests and 1 integration test, including failed-replacement cleanup. Covers versioned migration with reordered keys/backup, invalid/future config preservation, bounded per-IP tracking, control credentials, malformed/oversized frames, pairing and revocation. Integration listener uses an ephemeral port. |
+| Desktop `npm test` and `npm run build` | PASS: 3 frontend tests and Vite production build. |
+| Tauri `cargo check --offline` | PASS. |
+| Tauri `cargo test --offline` | FAIL: test executable exits `STATUS_ENTRYPOINT_NOT_FOUND` (`0xc0000139`); linker warns about multiple non-default manifests. |
+| Android `./gradlew.bat checkLineBudget :app:testDebugUnitTest :app:assembleDebug` | PASS: `BUILD SUCCESSFUL`, 43 tasks (3 executed, 5 cached, 35 up-to-date). |
+
+**Limits:** No physical phone/PC trial or real input injection was run. Windows ACL restriction and crash-safe identity/control-secret creation are not finished. Negative plaintext-on-TLS and Android pin-mismatch tests remain pending. The host was not stopped or its real stored profiles altered. No production security-complete claim is warranted.
 
 ## Real-use trial — waiting for user
 

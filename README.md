@@ -78,7 +78,9 @@ StreamDeckClone/
 │   └── dist/                              # Embedded web assets (standalone release)
 ├── proto/                                 # Single Source of Truth
 │   └── streamdeck.proto                   # Protobuf definitions for DeckMessage & Events
-├── run.ps1                                # 1-Command All-In-One Launcher (Admin)
+├── run.ps1                                # 1-Command All-In-One Launcher (Admin, Local)
+├── run-tailscale.ps1                      # 1-Command Tailscale Remote Launcher (Admin, Remote)
+├── run-tailscale.bat                      # Double-Click Tailscale Remote Launcher
 ├── start-host.bat                         # Host Engine Launcher (Admin)
 └── start-gui.bat                          # Desktop GUI Launcher
 ```
@@ -131,14 +133,29 @@ Communication is bidirectional using binary Protocol Buffers over WebSocket:
 ## 6. How to Build & Run (Runbook)
 
 ### Recommended: start and stop from the desktop app
-Build the host and desktop app as below, then open the desktop configurator. It automatically starts the host (the phone's WebSocket server) if no host is already running. Closing the desktop window quits the app and stops the host it started. A host started separately, especially as Administrator, remains owned by its original launcher and cannot be stopped by the desktop app. The connection controls are under **Connection settings**; pairing and editing buttons are the primary workflow. The desktop app embeds its frontend in release builds and does not run a separate Vite web server; `tauri dev` starts a Vite server only for development.
+Build the host and desktop app as below, then open the desktop configurator. It shows **Host stopped** until you press **Start Host** (unless a host is already running). Closing the desktop window sends the app to the tray; **Stop Host** or tray **Quit** stops only a host the desktop app started. A host started separately, especially as Administrator, remains owned by its original launcher and cannot be stopped by the desktop app. The connection controls are under **Connection settings**; pairing and editing buttons are the primary workflow. The desktop app embeds its frontend in release builds and does not run a separate Vite web server; `tauri dev` starts a Vite server only for development.
 
-### All-in-one development launcher:
+### All-in-one development launcher (Local Wi-Fi / USB):
 Connect one Android device (or set `ANDROID_SERIAL` if several are connected), then run from PowerShell:
 ```powershell
 .\run.ps1
 ```
 The script requests Administrator access for Windows input injection, rebuilds the Windows host and GUI in release mode, builds and tests the Android debug app, installs and opens it on the selected device, configures ADB reverse when available, and starts both Windows programs. It stops on a build failure and will not replace an already running host. With no device, it builds Android and starts the desktop programs; connect a device and rerun to install it. This separately launched host is external to the GUI, so **Stop Host** cannot stop it; close the host process yourself.
+
+### Tailscale remote launcher (Remote from Work):
+When remoting into your home/work PC over Tailscale:
+```powershell
+.\run-tailscale.ps1
+# or double-click run-tailscale.bat
+```
+This launcher:
+1. **Detects the PC's Tailscale IPv4 address** (`100.x.y.z`) automatically and sets `STREAMDECK_HOST_IP`.
+2. **Rebuilds host & desktop GUI** in release mode with Tailscale IP configuration and QR payloads.
+3. **Builds Android debug APK** (`checkLineBudget`, unit tests, `assembleDebug`).
+4. **Auto-discovers Android peers** via Tailscale or active network ADB (`<tailscale-ip>:5555`).
+5. **Configures ADB reverse port forwarding** (`tcp:4455 tcp:4455`) over the network tunnel.
+6. **Launches the Android app with Intent extras** (`--es host_address "$TailscaleIp:4455" --es fingerprint "$Fingerprint"`), automatically filling in your Tailscale connection parameters so you don't need to manually type a 64-character SHA-256 fingerprint on mobile.
+7. **Displays a summary banner** with the Tailscale address, port, and fingerprint for quick verification.
 
 ### Manual Step-by-Step:
 1. **Build Host Engine**:
@@ -159,7 +176,7 @@ The script requests Administrator access for Windows input injection, rebuilds t
    adb install -r android/app/build/outputs/apk/debug/app-debug.apk
    ```
 4. **Start the host**:
-   Open the desktop app; it starts the host automatically. Use `start-host.bat` only if you need a separately elevated host; that host cannot be stopped by closing the desktop app.
+   Open the desktop app and press **Start Host**. Use `start-host.bat` only if you need a separately elevated host; that host cannot be stopped from the desktop app.
 
 ---
 
@@ -167,7 +184,7 @@ The script requests Administrator access for Windows input injection, rebuilds t
 
 The desktop configurator reads profiles from the host on connection. Save/Clear sends a validated nine-key profile to the host, which persists it in the user's configuration directory (`StreamDeckClone/config.json`) and broadcasts changes to connected Android decks when that profile is active. Foreground-window detection switches between Default, Browser, VSCode, OBS, and VisualStudio. The configurator must connect locally; remote LAN clients cannot edit profiles. Actions include volume and media controls, desktop/task-manager/screenshot shortcuts, Ctrl+C/V/Z/S/W, and F5. Empty actions do nothing. A malformed configuration file is left untouched and the host uses defaults until corrected. Profile saves reject unsupported actions or overlong fields instead of silently changing them.
 
-The editor supports drag-and-drop key swapping as well as an accessible keyboard alternative (select key, press 'M', select target key, Esc to cancel). Key swaps save persistently to host profiles. Release builds launch without terminal windows (`windows_subsystem = "windows"` and `CREATE_NO_WINDOW`), and the GUI layout spans full height.
+The editor supports drag-and-drop key swapping as well as an accessible keyboard alternative (select key, press 'M', select target key, Esc to cancel). Key swaps save persistently to host profiles. The host stores profile schema version 1; when it reads an older unversioned profile file, it preserves the original as `config.legacy.json` before migrating. A corrupt, unsupported, or conflicting backup file causes startup to fail rather than replacing saved profiles. Keep both files for manual repair; do not delete the backup without checking its contents. Release builds launch without terminal windows (`windows_subsystem = "windows"` and `CREATE_NO_WINDOW`), and the GUI layout spans full height.
 
 **Pair a phone:** Click **Pair my phone** in the desktop app and scan its QR code (`streamdeck-pair:v2:<ip>:<port>:<code>:<certificate-sha256>`) or manually enter the address, six-digit code, and certificate fingerprint shown under **Connection details**. Verify the fingerprint on the trusted PC. Codes expire after five minutes or ten failed attempts. Remove a paired phone under **Connected phones** to revoke access.
 

@@ -1,4 +1,4 @@
-// [LINE BUDGET AUDIT] 147/150
+// [LINE BUDGET AUDIT] 186/250
 package com.streamdeck.client.presentation.deck
 
 import android.app.Application
@@ -33,7 +33,10 @@ class DeckViewModel(
     private val discoveryService = DeckDiscoveryService(application)
 
     private val _uiState = MutableStateFlow(
-        DeckUiState(hostAddress = prefs.getString("last_host", "") ?: ""),
+        DeckUiState(
+            hostAddress = prefs.getString("last_host", "") ?: "",
+            fingerprint = prefs.getString("last_fingerprint", "") ?: "",
+        ),
     )
     val uiState: StateFlow<DeckUiState> = _uiState.asStateFlow()
 
@@ -127,6 +130,7 @@ class DeckViewModel(
         }
         client.connect(host, port, fingerprint, deviceId, saved?.second.orEmpty(), _uiState.value.pairingCode) { pairedToken ->
             credentials.save(address, fingerprint, pairedToken)
+            prefs.edit().putString("last_fingerprint", fingerprint).apply()
             _uiState.update { it.copy(pairingCode = "", fingerprint = fingerprint) }
         }
     }

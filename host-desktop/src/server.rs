@@ -3,11 +3,11 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::{SinkExt, StreamExt};
 use prost::Message;
+use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
-use subtle::ConstantTimeEq;
 use tracing::{error, info, warn};
 
 use crate::audio::AudioController;
@@ -15,6 +15,7 @@ use crate::config::{AppConfig, KeyConfig};
 use crate::input::InputExecutor;
 use crate::layout::{create_layout_message, current_time_millis};
 use crate::pairing::{PairingStore, pairing_path};
+use crate::peer_throttle::PeerThrottle;
 use crate::profiles::ProfileWatcher;
 use crate::protocol::streamdeck::{
     DeckMessage, HandshakeRequest, HandshakeResponse, Heartbeat, KeyEventType, deck_message,
@@ -62,6 +63,7 @@ pub struct DeckServer {
     audio: Arc<Mutex<AudioController>>,
     config: Arc<Mutex<AppConfig>>,
     pairing: Arc<Mutex<PairingStore>>,
+    peer_throttle: Arc<Mutex<PeerThrottle>>,
     active_profile: Arc<Mutex<String>>,
     broadcast_tx: tokio::sync::broadcast::Sender<DeckMessage>,
 }
@@ -70,7 +72,7 @@ impl DeckServer {
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let audio = AudioController::new().unwrap_or_else(|_| AudioController::stub());
         let input_executor = Arc::new(InputExecutor::new(audio.clone()));
-        let config = AppConfig::load();
+        let config = AppConfig::load()?;
         let pairing = PairingStore::load(&pairing_path())?;
         let (broadcast_tx, _) = tokio::sync::broadcast::channel(16);
 
@@ -79,6 +81,7 @@ impl DeckServer {
             audio,
             config: Arc::new(Mutex::new(config)),
             pairing: Arc::new(Mutex::new(pairing)),
+            peer_throttle: Arc::new(Mutex::new(PeerThrottle::default())),
             active_profile: Arc::new(Mutex::new("Default".to_string())),
             broadcast_tx,
         })
@@ -118,7 +121,10 @@ impl DeckServer {
         });
 
         let identity = crate::tls::load_identity()?;
-        info!("Host certificate SHA-256 fingerprint: {}", identity.fingerprint);
+        info!(
+            "Host certificate SHA-256 fingerprint: {}",
+            identity.fingerprint
+        );
         let phone = TcpListener::bind("0.0.0.0:4455").await?;
         let control = TcpListener::bind("127.0.0.1:4456").await?;
         let listeners = vec![(phone, false), (control, true)];
@@ -126,12 +132,17 @@ impl DeckServer {
         let tls = Arc::new(tokio_rustls::TlsAcceptor::from(Arc::new(identity.config)));
         for (listener, control_channel) in listeners {
             let tls = tls.clone();
-            let connection_limit = Arc::new(tokio::sync::Semaphore::new(if control_channel { 4 } else { 64 }));
+            let connection_limit = Arc::new(tokio::sync::Semaphore::new(if control_channel {
+                4
+            } else {
+                64
+            }));
             let mut peer_limits = std::collections::HashMap::new();
             let control_secret = identity.control_secret.clone();
             let executor = Arc::clone(&self.input_executor);
             let cfg = Arc::clone(&self.config);
             let pairing = Arc::clone(&self.pairing);
+            let peer_throttle = Arc::clone(&self.peer_throttle);
             let active_profile = Arc::clone(&self.active_profile);
             let btx = self.broadcast_tx.clone();
 
@@ -139,10 +150,16 @@ impl DeckServer {
                 loop {
                     match listener.accept().await {
                         Ok((stream, peer_addr)) => {
+                            if !control_channel
+                                && !peer_throttle.lock().unwrap().allowed(peer_addr.ip())
+                            {
+                                continue;
+                            }
                             peer_limits.retain(|_, limit: &mut Arc<tokio::sync::Semaphore>| {
                                 limit.available_permits() < 4
                             });
-                            let peer_limit = peer_limits.entry(peer_addr.ip())
+                            let peer_limit = peer_limits
+                                .entry(peer_addr.ip())
                                 .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(4)))
                                 .clone();
                             let (Ok(global_permit), Ok(peer_permit)) = (
@@ -154,6 +171,7 @@ impl DeckServer {
                             let exec = Arc::clone(&executor);
                             let c = Arc::clone(&cfg);
                             let p = Arc::clone(&pairing);
+                            let attempts = Arc::clone(&peer_throttle);
                             let ap = Arc::clone(&active_profile);
                             let tx = btx.clone();
                             let rx = btx.subscribe();
@@ -163,14 +181,52 @@ impl DeckServer {
                             tokio::spawn(async move {
                                 let _permits = (global_permit, peer_permit);
                                 let result = if control_channel {
-                                    handle_connection(stream, peer_addr, exec, c, p, ap, tx, rx, pairing_path(), Some(secret)).await
+                                    handle_connection(
+                                        stream,
+                                        peer_addr,
+                                        exec,
+                                        c,
+                                        p,
+                                        ap,
+                                        tx,
+                                        rx,
+                                        pairing_path(),
+                                        Some(secret),
+                                        None,
+                                    )
+                                    .await
                                 } else {
-                                    match tokio::time::timeout(std::time::Duration::from_secs(5), acceptor.accept(stream)).await {
-                                        Ok(Ok(secured)) => handle_connection(secured, peer_addr, exec, c, p, ap, tx, rx, pairing_path(), None).await,
-                                        _ => return,
+                                    match tokio::time::timeout(
+                                        std::time::Duration::from_secs(5),
+                                        acceptor.accept(stream),
+                                    )
+                                    .await
+                                    {
+                                        Ok(Ok(secured)) => {
+                                            handle_connection(
+                                                secured,
+                                                peer_addr,
+                                                exec,
+                                                c,
+                                                p,
+                                                ap,
+                                                tx,
+                                                rx,
+                                                pairing_path(),
+                                                None,
+                                                Some(attempts),
+                                            )
+                                            .await
+                                        }
+                                        _ => {
+                                            attempts.lock().unwrap().failed(peer_addr.ip());
+                                            return;
+                                        }
                                     }
                                 };
-                                if let Err(e) = result { warn!("Connection error with {}: {}", peer_addr, e); }
+                                if let Err(e) = result {
+                                    warn!("Connection error with {}: {}", peer_addr, e);
+                                }
                             });
                         }
                         Err(e) => error!("Error accepting connection: {}", e),
@@ -196,30 +252,57 @@ async fn handle_connection(
     mut broadcast_rx: tokio::sync::broadcast::Receiver<DeckMessage>,
     pairing_file: std::path::PathBuf,
     control_secret: Option<String>,
+    peer_throttle: Option<Arc<Mutex<PeerThrottle>>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let trusted = control_secret.is_some();
     #[allow(clippy::result_large_err)]
     let callback = move |req: &Request, response: Response| {
         if let Some(secret) = &control_secret {
             let expected = format!("Bearer {secret}");
-            let provided = req.headers().get("authorization")
-                .and_then(|value| value.to_str().ok()).unwrap_or("");
-            let origin = req.headers().get("origin").and_then(|value| value.to_str().ok()).unwrap_or("");
-            let allowed = matches!(origin, "http://localhost:1420" | "http://127.0.0.1:1420" | "tauri://localhost" | "http://tauri.localhost");
+            let provided = req
+                .headers()
+                .get("authorization")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("");
+            let origin = req
+                .headers()
+                .get("origin")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("");
+            let allowed = matches!(
+                origin,
+                "http://localhost:1420"
+                    | "http://127.0.0.1:1420"
+                    | "tauri://localhost"
+                    | "http://tauri.localhost"
+            );
             if !allowed || provided.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() != 1 {
-                return Err(tokio_tungstenite::tungstenite::http::Response::builder().status(403)
-                    .body(Some("Forbidden".to_string())).unwrap());
+                return Err(tokio_tungstenite::tungstenite::http::Response::builder()
+                    .status(403)
+                    .body(Some("Forbidden".to_string()))
+                    .unwrap());
             }
         } else if req.headers().get("sec-websocket-protocol").is_some() {
-            return Err(tokio_tungstenite::tungstenite::http::Response::builder().status(403)
-                .body(Some("Forbidden".to_string())).unwrap());
+            return Err(tokio_tungstenite::tungstenite::http::Response::builder()
+                .status(403)
+                .body(Some("Forbidden".to_string()))
+                .unwrap());
         }
         Ok(response)
     };
-    let settings = WebSocketConfig::default().max_message_size(Some(65536)).max_frame_size(Some(65536));
-    let ws_stream = tokio::time::timeout(std::time::Duration::from_secs(5),
-        tokio_tungstenite::accept_hdr_async_with_config(stream, callback, Some(settings))).await??;
-    info!("Accepted {} WebSocket connection from {}", if trusted { "control" } else { "phone" }, peer_addr);
+    let settings = WebSocketConfig::default()
+        .max_message_size(Some(65536))
+        .max_frame_size(Some(65536));
+    let ws_stream = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio_tungstenite::accept_hdr_async_with_config(stream, callback, Some(settings)),
+    )
+    .await??;
+    info!(
+        "Accepted {} WebSocket connection from {}",
+        if trusted { "control" } else { "phone" },
+        peer_addr
+    );
 
     let (mut write, mut read) = ws_stream.split();
     let mut deck_session: Option<(String, String)> = None;
@@ -231,6 +314,9 @@ async fn handle_connection(
         tokio::select! {
             _ = &mut handshake_deadline, if !trusted && deck_session.is_none() => {
                 warn!("Phone handshake timed out");
+                if let Some(attempts) = &peer_throttle {
+                    attempts.lock().unwrap().failed(peer_addr.ip());
+                }
                 break;
             }
             _ = authorization_check.tick() => {
@@ -259,6 +345,9 @@ async fn handle_connection(
                                             }
                                             deck_session = handle_handshake(req, &mut write, &config, &pairing, &active_profile, &pairing_file).await?;
                                             if deck_session.is_none() {
+                                                if let Some(attempts) = &peer_throttle {
+                                                    attempts.lock().unwrap().failed(peer_addr.ip());
+                                                }
                                                 let _ = write.send(WsMessage::Close(None)).await;
                                                 break;
                                             }
@@ -271,12 +360,18 @@ async fn handle_connection(
                                             }
                                         } else {
                                             warn!("Rejected deck message before pairing");
+                                            if let Some(attempts) = &peer_throttle {
+                                                attempts.lock().unwrap().failed(peer_addr.ip());
+                                            }
                                             let _ = write.send(WsMessage::Close(None)).await;
                                             break;
                                         }
                                     }
                                     Err(e) => {
                                         warn!("Failed to decode Protobuf message: {}", e);
+                                        if let Some(attempts) = &peer_throttle {
+                                            attempts.lock().unwrap().failed(peer_addr.ip());
+                                        }
                                         let _ = write.send(WsMessage::Close(None)).await;
                                         break;
                                     }
@@ -293,6 +388,9 @@ async fn handle_connection(
                                     }
                                 } else {
                                     warn!("Rejected untrusted or oversized control message from: {}", peer_addr);
+                                    if let Some(attempts) = &peer_throttle {
+                                        attempts.lock().unwrap().failed(peer_addr.ip());
+                                    }
                                     let _ = write.send(WsMessage::Close(None)).await;
                                     break;
                                 }
@@ -309,6 +407,10 @@ async fn handle_connection(
                     }
                     Some(Err(e)) => {
                         warn!("Error reading WS: {}", e);
+                        if !trusted && deck_session.is_none()
+                            && let Some(attempts) = &peer_throttle {
+                                attempts.lock().unwrap().failed(peer_addr.ip());
+                            }
                         break;
                     }
                     None => {
